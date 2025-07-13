@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Navigation Test - BugReel</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f0f8ff;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            background-color: #e8f5e8;
+            border: 1px solid #d4e6d4;
+        }
+        .navigation-links {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .navigation-links a {
+            display: block;
+            padding: 15px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .navigation-links a:hover {
+            background-color: #0056b3;
+        }
+        .instructions {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 Cross-Domain Navigation Test</h1>
+        
+        <div class="instructions">
+            <h3>Testing Steps:</h3>
+            <ol>
+                <li><strong>Start Recording:</strong> Click "Start Recording" in BugReel extension</li>
+                <li><strong>Verify Toolbar:</strong> Look for toolbar in top-right corner</li>
+                <li><strong>Navigate:</strong> Click one of the links below to go to a different domain</li>
+                <li><strong>Check Toolbar:</strong> Verify toolbar persists after navigation</li>
+                <li><strong>Return:</strong> Use browser back button to return here</li>
+                <li><strong>Stop Recording:</strong> Stop recording and check the report</li>
+            </ol>
+        </div>
+        
+        <div class="status">
+            <h3>📊 Current Status:</h3>
+            <p id="statusText">Page loaded - ready to test</p>
+            <button onclick="checkToolbar()">Check for Toolbar</button>
+            <button onclick="generateLogs()">Generate Test Logs</button>
+        </div>
+        
+        <h3>🌐 Navigate to Different Domains:</h3>
+        <div class="navigation-links">
+            <a href="https://www.google.com" target="_self">🔍 Google (Search Engine)</a>
+            <a href="https://www.github.com" target="_self">💻 GitHub (Code Repository)</a>
+            <a href="https://www.stackoverflow.com" target="_self">❓ Stack Overflow (Q&A)</a>
+            <a href="https://www.reddit.com" target="_self">💬 Reddit (Social)</a>
+            <a href="https://www.youtube.com" target="_self">📺 YouTube (Video)</a>
+        </div>
+        
+        <div style="margin-top: 30px; text-align: center;">
+            <small>Use browser back button to return to this page after navigating</small>
+        </div>
+    </div>
+
+    <script>
+        console.log('🔄 Navigation test page loaded at:', new Date().toISOString());
+        console.log('🔍 Current URL:', window.location.href);
+        
+        function checkToolbar() {
+            const toolbar = document.getElementById('bugreel-toolbar');
+            const statusText = document.getElementById('statusText');
+            
+            if (toolbar) {
+                console.log('✅ Toolbar found:', toolbar);
+                statusText.textContent = '✅ Toolbar is present and visible';
+                statusText.style.color = 'green';
+            } else {
+                console.log('❌ Toolbar not found');
+                statusText.textContent = '❌ Toolbar not found - may need to re-inject';
+                statusText.style.color = 'red';
+            }
+        }
+        
+        function generateLogs() {
+            console.log('📝 Test log from navigation test page');
+            console.error('❌ Test error from navigation test page');
+            console.warn('⚠️ Test warning from navigation test page');
+            
+            // Test network request
+            fetch('https://jsonplaceholder.typicode.com/posts/1')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('🌐 Test network request completed:', data);
+                    document.getElementById('statusText').textContent = 'Generated logs and network request';
+                })
+                .catch(error => {
+                    console.error('❌ Test network request failed:', error);
+                });
+        }
+        
+        // Automatically check for toolbar every 3 seconds
+        setInterval(() => {
+            const toolbar = document.getElementById('bugreel-toolbar');
+            if (toolbar) {
+                console.log('⏰ Periodic check: Toolbar is present');
+            } else {
+                console.log('⏰ Periodic check: Toolbar is missing');
+            }
+        }, 3000);
+        
+        // Generate initial test log
+        setTimeout(() => {
+            console.log('📋 Initial test log after page load');
+        }, 1000);
+    </script>
+</body>
+</html> 

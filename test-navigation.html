@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BugReel Navigation Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+        }
+        .test-section h2 {
+            color: #555;
+            margin-top: 0;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .navigation-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .navigation-links a {
+            display: inline-block;
+            padding: 10px 15px;
+            background-color: #28a745;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+        .navigation-links a:hover {
+            background-color: #218838;
+        }
+        .log-output {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .instructions {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 BugReel Navigation Test</h1>
+        
+        <div class="instructions">
+            <h3>Testing Instructions:</h3>
+            <ol>
+                <li>Start recording with the BugReel extension</li>
+                <li>Click the buttons below to generate console logs and user actions</li>
+                <li>Navigate to different domains using the links below</li>
+                <li>Verify that the recording toolbar remains visible and functional</li>
+                <li>Stop recording and check if the HTML report is generated</li>
+            </ol>
+        </div>
+        
+        <div class="test-section">
+            <h2>Console Log Tests</h2>
+            <p>Click these buttons to generate different types of console logs:</p>
+            <button onclick="generateLog('info')">Info Log</button>
+            <button onclick="generateLog('warn')">Warning Log</button>
+            <button onclick="generateLog('error')">Error Log</button>
+            <button onclick="generateLog('debug')">Debug Log</button>
+            <button onclick="generateComplexLog()">Complex Object Log</button>
+        </div>
+        
+        <div class="test-section">
+            <h2>User Action Tests</h2>
+            <p>Click these buttons to generate user actions:</p>
+            <button onclick="simulateUserAction('click')">Simulate Click</button>
+            <button onclick="simulateUserAction('input')">Simulate Input</button>
+            <button onclick="simulateUserAction('scroll')">Simulate Scroll</button>
+            <input type="text" placeholder="Test input field" id="testInput">
+        </div>
+        
+        <div class="test-section">
+            <h2>Network Request Tests</h2>
+            <p>Click these buttons to generate network requests:</p>
+            <button onclick="makeAPICall('success')">Successful API Call</button>
+            <button onclick="makeAPICall('error')">Failed API Call</button>
+            <button onclick="makeAPICall('slow')">Slow API Call</button>
+        </div>
+        
+        <div class="test-section">
+            <h2>Cross-Domain Navigation Tests</h2>
+            <p>Click these links to test navigation between different domains:</p>
+            <div class="navigation-links">
+                <a href="https://www.google.com" target="_self">Google</a>
+                <a href="https://www.github.com" target="_self">GitHub</a>
+                <a href="https://www.stackoverflow.com" target="_self">Stack Overflow</a>
+                <a href="https://www.reddit.com" target="_self">Reddit</a>
+                <a href="https://www.youtube.com" target="_self">YouTube</a>
+                <a href="file:///home/abhi/bugreel/test-page.html" target="_self">Back to Test Page</a>
+            </div>
+        </div>
+        
+        <div class="test-section">
+            <h2>Live Log Output</h2>
+            <p>Real-time display of console logs and actions:</p>
+            <div class="log-output" id="logOutput"></div>
+        </div>
+    </div>
+
+    <script>
+        let logCounter = 0;
+        
+        function generateLog(type) {
+            logCounter++;
+            const message = `Test ${type} message #${logCounter} - ${new Date().toISOString()}`;
+            const logOutput = document.getElementById('logOutput');
+            
+            // Add to display
+            logOutput.innerHTML += `<div>[${type.toUpperCase()}] ${message}</div>`;
+            logOutput.scrollTop = logOutput.scrollHeight;
+            
+            // Generate actual console log
+            switch(type) {
+                case 'info':
+                    console.info(message);
+                    break;
+                case 'warn':
+                    console.warn(message);
+                    break;
+                case 'error':
+                    console.error(message);
+                    break;
+                case 'debug':
+                    console.debug(message);
+                    break;
+                default:
+                    console.log(message);
+            }
+        }
+        
+        function generateComplexLog() {
+            const complexObject = {
+                user: {
+                    id: 12345,
+                    name: "Test User",
+                    email: "test@example.com",
+                    preferences: {
+                        theme: "dark",
+                        notifications: true
+                    }
+                },
+                timestamp: new Date().toISOString(),
+                data: [1, 2, 3, 4, 5],
+                nested: {
+                    deeply: {
+                        nested: {
+                            value: "Found me!"
+                        }
+                    }
+                }
+            };
+            
+            console.log('Complex object:', complexObject);
+            
+            const logOutput = document.getElementById('logOutput');
+            logOutput.innerHTML += `<div>[COMPLEX] Logged complex object - see console</div>`;
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+        
+        function simulateUserAction(action) {
+            const logOutput = document.getElementById('logOutput');
+            
+            switch(action) {
+                case 'click':
+                    logOutput.innerHTML += `<div>[ACTION] Simulated click at ${new Date().toISOString()}</div>`;
+                    break;
+                case 'input':
+                    const testInput = document.getElementById('testInput');
+                    testInput.value = `Test input ${Date.now()}`;
+                    logOutput.innerHTML += `<div>[ACTION] Simulated input: ${testInput.value}</div>`;
+                    break;
+                case 'scroll':
+                    window.scrollTo(0, Math.random() * 500);
+                    logOutput.innerHTML += `<div>[ACTION] Simulated scroll to ${window.scrollY}px</div>`;
+                    break;
+            }
+            
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+        
+        async function makeAPICall(type) {
+            const logOutput = document.getElementById('logOutput');
+            logOutput.innerHTML += `<div>[NETWORK] Starting ${type} API call...</div>`;
+            logOutput.scrollTop = logOutput.scrollHeight;
+            
+            try {
+                let url;
+                switch(type) {
+                    case 'success':
+                        url = 'https://jsonplaceholder.typicode.com/posts/1';
+                        break;
+                    case 'error':
+                        url = 'https://jsonplaceholder.typicode.com/posts/999999';
+                        break;
+                    case 'slow':
+                        url = 'https://httpbin.org/delay/2';
+                        break;
+                }
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                logOutput.innerHTML += `<div>[NETWORK] ${type} API call completed: ${response.status}</div>`;
+                console.log(`${type} API response:`, data);
+                
+            } catch (error) {
+                logOutput.innerHTML += `<div>[NETWORK] ${type} API call failed: ${error.message}</div>`;
+                console.error(`${type} API error:`, error);
+            }
+            
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+        
+        // Auto-generate some activity
+        setInterval(() => {
+            if (Math.random() > 0.8) {
+                generateLog('info');
+            }
+        }, 3000);
+        
+        // Log page load
+        console.log('BugReel Navigation Test page loaded at', new Date().toISOString());
+        
+        // Add some initial logs
+        setTimeout(() => {
+            generateLog('info');
+            generateLog('warn');
+        }, 1000);
+    </script>
+</body>
+</html> 

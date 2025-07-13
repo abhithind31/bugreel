@@ -2,12 +2,76 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>BugReel Offscreen Document</title>
+    <title>BugReel Recording</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .status {
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+            font-weight: 500;
+        }
+        .instructions {
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .instructions h3 {
+            margin-top: 0;
+            color: #007bff;
+        }
+        .instructions ul {
+            margin-bottom: 0;
+        }
+        .instructions li {
+            margin: 5px 0;
+        }
+    </style>
 </head>
 <body>
-    <h1>BugReel Offscreen Document</h1>
-    <p>This document handles screen recording for the BugReel extension.</p>
-    <p>Status: <span id="status">Ready</span></p>
+    <div class="container">
+        <h1>🎥 BugReel</h1>
+        <p class="subtitle">Personal Bug Reporting Tool</p>
+        
+        <div class="status">
+            Status: <span id="status">Ready</span>
+        </div>
+        
+        <div class="instructions">
+            <h3>📋 Quick Guide</h3>
+            <ul>
+                <li>When prompted, select <strong>"Current Tab"</strong> for the best recording experience</li>
+                <li>The extension will automatically capture your current browser tab</li>
+                <li>Use the floating toolbar to control recording</li>
+                <li>Click "Stop" when done to generate your bug report</li>
+            </ul>
+        </div>
+    </div>
     
     <script src="offscreen.js"></script>
 </body>

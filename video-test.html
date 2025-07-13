@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Recording Test - BugReel</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f0f8ff;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+        }
+        .test-section h3 {
+            color: #555;
+            margin-top: 0;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            background-color: #e8f5e8;
+            border: 1px solid #d4e6d4;
+        }
+        .console-output {
+            background-color: #1e1e1e;
+            color: #ffffff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .instructions {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 Video Recording Debug Test</h1>
+        
+        <div class="instructions">
+            <h3>🎯 Purpose: Debug video recording specifically</h3>
+            <p>This page is designed to test video recording functionality in isolation.</p>
+            <ol>
+                <li><strong>Open Developer Console</strong> (F12) to see detailed logs</li>
+                <li><strong>Start Recording</strong> with BugReel extension</li>
+                <li><strong>Watch console</strong> for video recording messages</li>
+                <li><strong>Generate activity</strong> using buttons below</li>
+                <li><strong>Stop recording</strong> and check if HTML report is generated</li>
+            </ol>
+        </div>
+        
+        <div class="status">
+            <h3>📊 Current Status:</h3>
+            <p id="statusText">Ready to test video recording</p>
+        </div>
+        
+        <div class="test-section">
+            <h3>🎬 Video Recording Test</h3>
+            <p>Focus on video recording functionality:</p>
+            <button onclick="generateActivity()">Generate Test Activity</button>
+            <button onclick="checkVideoData()">Check Video Data</button>
+            <button onclick="testPermissions()">Test Permissions</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 Console Output</h3>
+            <p>Real-time console messages:</p>
+            <div class="console-output" id="consoleOutput">
+                Waiting for console messages...
+            </div>
+        </div>
+        
+        <div class="test-section">
+            <h3>🔍 Expected Console Messages</h3>
+            <p>Look for these key messages in the console:</p>
+            <ul>
+                <li><strong>🎬 Starting video recording...</strong></li>
+                <li><strong>📄 Ensuring offscreen document...</strong></li>
+                <li><strong>📤 Sending START_RECORDING message...</strong></li>
+                <li><strong>📥 Received response from offscreen document...</strong></li>
+                <li><strong>✅ Video recording started successfully</strong></li>
+                <li><strong>📹 VIDEO_RECORDED message received...</strong></li>
+                <li><strong>✅ Video data stored in session successfully</strong></li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Console output display
+        const consoleOutput = document.getElementById('consoleOutput');
+        
+        function addToConsole(message, type = 'log') {
+            const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+            const div = document.createElement('div');
+            div.style.marginBottom = '5px';
+            div.style.color = type === 'error' ? '#ff6b6b' : type === 'warn' ? '#feca57' : '#ffffff';
+            div.textContent = `[${timestamp}] ${message}`;
+            consoleOutput.appendChild(div);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+        
+        // Override console methods to capture output
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        
+        console.log = function(...args) {
+            const message = args.join(' ');
+            if (message.includes('SERVICE WORKER:') || message.includes('OFFSCREEN:') || message.includes('VIDEO')) {
+                addToConsole(message, 'log');
+            }
+            originalLog.apply(console, args);
+        };
+        
+        console.error = function(...args) {
+            const message = args.join(' ');
+            addToConsole(message, 'error');
+            originalError.apply(console, args);
+        };
+        
+        console.warn = function(...args) {
+            const message = args.join(' ');
+            addToConsole(message, 'warn');
+            originalWarn.apply(console, args);
+        };
+        
+        // Test functions
+        function generateActivity() {
+            console.log('🎯 Test: Generating activity for video recording');
+            console.error('❌ Test error for video capture');
+            console.warn('⚠️ Test warning for video capture');
+            
+            // Update status
+            const statusText = document.getElementById('statusText');
+            statusText.textContent = 'Generated test activity - check if it appears in recording';
+            
+            // Make a test network request
+            fetch('https://jsonplaceholder.typicode.com/posts/1')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('🌐 Test network request completed:', data.title);
+                })
+                .catch(error => {
+                    console.error('❌ Test network request failed:', error);
+                });
+        }
+        
+        function checkVideoData() {
+            console.log('🔍 Test: Checking for video data in extension');
+            addToConsole('🔍 Check console for video data storage messages', 'log');
+            
+            const statusText = document.getElementById('statusText');
+            statusText.textContent = 'Requested video data check - see console';
+        }
+        
+        function testPermissions() {
+            console.log('🔐 Test: Checking browser permissions for screen recording');
+            
+            // Test if getDisplayMedia is available
+            if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+                console.log('✅ getDisplayMedia API is available');
+                addToConsole('✅ getDisplayMedia API is available', 'log');
+            } else {
+                console.error('❌ getDisplayMedia API is not available');
+                addToConsole('❌ getDisplayMedia API is not available', 'error');
+            }
+            
+            const statusText = document.getElementById('statusText');
+            statusText.textContent = 'Permission check completed - see console';
+        }
+        
+        // Page load
+        console.log('🎥 Video recording test page loaded');
+        addToConsole('🎥 Video recording test page loaded', 'log');
+        
+        // Generate initial activity
+        setTimeout(() => {
+            console.log('📋 Initial test log for video recording');
+        }, 1000);
+    </script>
+</body>
+</html> 

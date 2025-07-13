@@ -28,6 +28,8 @@
             color: #6c757d;
         }
         
+
+        
         .controls {
             display: flex;
             flex-direction: column;
@@ -60,6 +62,16 @@
         
         .btn-danger:hover:not(:disabled) {
             background-color: #c82333;
+        }
+        
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+            font-size: 12px;
+        }
+        
+        .btn-secondary:hover {
+            background-color: #5a6268;
         }
         
         .btn:disabled {
@@ -103,6 +115,30 @@
             50% { opacity: 0.5; }
             100% { opacity: 1; }
         }
+        
+        .recording-info {
+            background-color: #e8f4f8;
+            border: 1px solid #bee5eb;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+            font-size: 12px;
+            color: #0c5460;
+        }
+        
+        .recording-info p {
+            margin: 0 0 10px 0;
+            font-weight: 500;
+        }
+        
+        .recording-info ul {
+            margin: 0;
+            padding-left: 18px;
+        }
+        
+        .recording-info li {
+            margin-bottom: 3px;
+        }
     </style>
 </head>
 <body>
@@ -111,12 +147,25 @@
         <div class="subtitle">Personal Bug Reporting Tool</div>
     </div>
     
+
+    
     <div class="controls">
-        <button id="startBtn" class="btn btn-primary">Start Recording</button>
+        <button id="startBtn" class="btn btn-primary">Start Tab Recording</button>
         <button id="stopBtn" class="btn btn-danger" disabled>Stop Recording</button>
+        <button id="debugBtn" class="btn btn-secondary">Debug Toolbar Only</button>
     </div>
     
-    <div id="status" class="status idle">Ready to record</div>
+    <div id="status" class="status idle">Ready to record current tab</div>
+    
+    <div id="recording-info" class="recording-info" style="display: none;">
+        <p><strong>💡 Tab Recording Active:</strong></p>
+        <ul>
+            <li>✅ Floating toolbar will persist across domain navigation</li>
+            <li>🎛️ Use toolbar to control audio, microphone, and recording</li>
+            <li>🌐 Navigate freely - extension will continue recording</li>
+            <li>⏹️ Click stop when done to generate your report</li>
+        </ul>
+    </div>
     
     <script src="popup.js"></script>
 </body>

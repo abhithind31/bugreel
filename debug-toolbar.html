@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Toolbar Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .debug-container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .debug-section {
+            margin: 20px 0;
+            padding: 15px;
+            border-left: 4px solid #007bff;
+            background-color: #f8f9fa;
+        }
+        .debug-section h3 {
+            margin-top: 0;
+            color: #007bff;
+        }
+        .console-output {
+            background-color: #1e1e1e;
+            color: #ffffff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 10px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .step {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+        }
+        .step.success {
+            background-color: #d4edda;
+            border-left: 4px solid #28a745;
+        }
+        .step.error {
+            background-color: #f8d7da;
+            border-left: 4px solid #dc3545;
+        }
+        .step.warning {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .toolbar-check {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: #28a745;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div class="debug-container">
+        <h1>🔧 Debug Toolbar Test</h1>
+        
+        <div class="debug-section">
+            <h3>Step 1: Check Extension Permissions</h3>
+            <p>Make sure the BugReel extension is loaded and has the necessary permissions:</p>
+            <ul>
+                <li>Extension should be visible in chrome://extensions/</li>
+                <li>Extension should have "activeTab", "scripting", and "storage" permissions</li>
+                <li>Extension should be enabled</li>
+            </ul>
+        </div>
+        
+        <div class="debug-section">
+            <h3>Step 2: Open Browser Console</h3>
+            <p>Open Developer Tools (F12) and go to the Console tab. You should see:</p>
+            <ul>
+                <li>Page load message from this page</li>
+                <li>Service worker messages when you start recording</li>
+                <li>Content script messages when the script is injected</li>
+            </ul>
+        </div>
+        
+        <div class="debug-section">
+            <h3>Step 3: Test Extension Recording</h3>
+            <p>Click "Start Recording" in the BugReel extension popup and watch the console for messages.</p>
+            <button onclick="checkForToolbar()">Check for Toolbar</button>
+            <button onclick="manualTestLogging()">Generate Test Logs</button>
+        </div>
+        
+        <div class="debug-section">
+            <h3>Step 4: Console Output</h3>
+            <div class="console-output" id="consoleOutput">
+                Console messages will appear here...
+            </div>
+        </div>
+        
+        <div class="debug-section">
+            <h3>Step 5: Manual Content Script Test</h3>
+            <p>You can manually test if content script injection works:</p>
+            <button onclick="testContentScriptInjection()">Test Content Script</button>
+        </div>
+    </div>
+
+    <script>
+        // Console output display
+        const consoleOutput = document.getElementById('consoleOutput');
+        
+        function addToConsole(message, type = 'log') {
+            const timestamp = new Date().toISOString();
+            const div = document.createElement('div');
+            div.style.marginBottom = '5px';
+            div.style.color = type === 'error' ? '#ff6b6b' : type === 'warn' ? '#feca57' : '#ffffff';
+            div.textContent = `[${timestamp}] ${message}`;
+            consoleOutput.appendChild(div);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+        
+        // Override console methods to capture output
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        
+        console.log = function(...args) {
+            addToConsole(args.join(' '), 'log');
+            originalLog.apply(console, args);
+        };
+        
+        console.error = function(...args) {
+            addToConsole(args.join(' '), 'error');
+            originalError.apply(console, args);
+        };
+        
+        console.warn = function(...args) {
+            addToConsole(args.join(' '), 'warn');
+            originalWarn.apply(console, args);
+        };
+        
+        // Test functions
+        function checkForToolbar() {
+            const toolbar = document.getElementById('bugreel-toolbar');
+            if (toolbar) {
+                console.log('✅ Toolbar found!', toolbar);
+                // Add visual indicator
+                const indicator = document.createElement('div');
+                indicator.className = 'toolbar-check';
+                indicator.textContent = '✅ Toolbar Found!';
+                document.body.appendChild(indicator);
+                setTimeout(() => document.body.removeChild(indicator), 3000);
+            } else {
+                console.log('❌ Toolbar not found');
+                addToConsole('❌ Toolbar not found', 'error');
+            }
+        }
+        
+        function manualTestLogging() {
+            console.log('Test log message from debug page');
+            console.error('Test error message from debug page');
+            console.warn('Test warning message from debug page');
+            
+            // Test network request
+            fetch('https://jsonplaceholder.typicode.com/posts/1')
+                .then(response => response.json())
+                .then(data => console.log('Test network request completed:', data))
+                .catch(error => console.error('Test network request failed:', error));
+        }
+        
+        function testContentScriptInjection() {
+            if (typeof chrome !== 'undefined' && chrome.runtime) {
+                console.log('Chrome extension APIs available');
+                addToConsole('Chrome extension APIs available', 'log');
+            } else {
+                console.error('Chrome extension APIs not available');
+                addToConsole('Chrome extension APIs not available', 'error');
+            }
+        }
+        
+        // Page load
+        console.log('Debug toolbar test page loaded');
+        console.log('URL:', window.location.href);
+        console.log('User agent:', navigator.userAgent);
+        
+        // Generate some initial activity
+        setTimeout(() => {
+            console.log('Initial test log after 1 second');
+        }, 1000);
+        
+        // Check for toolbar every 2 seconds
+        setInterval(() => {
+            const toolbar = document.getElementById('bugreel-toolbar');
+            if (toolbar) {
+                console.log('Toolbar status: FOUND');
+            }
+        }, 2000);
+    </script>
+</body>
+</html> 

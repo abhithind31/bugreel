@@ -1,5 +1,5 @@
 // background.js - Service Worker for BugReel extension
-console.log('SERVICE WORKER: BugReel service worker loaded at', new Date().toISOString());
+console.log('SERVICE WORKER: 🚀 BugReel service worker loaded at', new Date().toISOString());
 
 // Session storage keys
 const STORAGE_KEYS = {
@@ -9,11 +9,19 @@ const STORAGE_KEYS = {
     USER_ACTIONS: 'userActions',
     ENVIRONMENT_DATA: 'environmentData',
     RECORDING_START_TIME: 'recordingStartTime',
-    VIDEO_DATA: 'videoData'
+    VIDEO_DATA: 'videoData',
+    VIDEO_ERROR: 'videoError' // Added for video recording errors
 };
+
+// Track service worker restarts
+let serviceWorkerStartTime = Date.now();
+console.log('SERVICE WORKER: 📊 Service worker start time:', new Date(serviceWorkerStartTime).toISOString());
 
 // Offscreen document management
 let offscreenDocumentPromise = null;
+
+// In-memory storage for large video data (Chrome storage.session has 1MB limit)
+let videoDataInMemory = null;
 
 // Initialize storage
 chrome.runtime.onInstalled.addListener(async () => {
@@ -25,6 +33,111 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(() => {
     console.log('SERVICE WORKER: Service worker started');
 });
+
+// Track tab navigation during recording
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    try {
+        console.log('SERVICE WORKER: 🔄 Navigation event detected - Tab:', tabId, 'URL:', changeInfo.url || tab.url, 'Status:', changeInfo.status);
+        
+        const isRecording = await getRecordingState();
+        console.log('SERVICE WORKER: 📊 Current recording state:', isRecording);
+        
+        if (!isRecording) {
+            console.log('SERVICE WORKER: ⏹️ Not recording, ignoring navigation');
+            return;
+        }
+
+        // Get current active tab
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!activeTab || activeTab.id !== tabId) {
+            console.log('SERVICE WORKER: 🚫 Not active tab (current active:', activeTab?.id, 'event tab:', tabId, '), ignoring navigation');
+            return;
+        }
+
+        console.log('SERVICE WORKER: ✅ Active tab navigation detected, need to re-inject content script');
+
+        // Re-inject on any URL change or status change
+        // NOTE: Video recording continues seamlessly in the offscreen document
+        // Only the content script (UI and logging) needs to be re-injected
+        if (changeInfo.url || changeInfo.status === 'complete') {
+            console.log('SERVICE WORKER: 🔄 Re-injecting content script due to navigation (video recording continues uninterrupted)');
+            
+            // Add a small delay to ensure the new page is ready
+            if (changeInfo.status === 'complete') {
+                console.log('SERVICE WORKER: ⏰ Page complete, waiting 500ms before re-injection...');
+                setTimeout(async () => {
+                    try {
+                        await reinjectContentScript(tabId);
+                    } catch (error) {
+                        console.error('SERVICE WORKER: ❌ Delayed re-injection failed:', error);
+                    }
+                }, 500);
+            } else {
+                // Immediate re-injection for URL changes
+                await reinjectContentScript(tabId);
+            }
+        }
+    } catch (error) {
+        console.error('SERVICE WORKER: ❌ Error handling tab navigation:', error);
+    }
+});
+
+// Content script re-injection function
+async function reinjectContentScript(tabId) {
+    console.log('SERVICE WORKER: Re-injecting content script for tab:', tabId);
+    
+    try {
+        // Remove any existing toolbar first
+        try {
+            await chrome.tabs.sendMessage(tabId, { type: 'REMOVE_TOOLBAR' });
+        } catch (error) {
+            // Ignore errors - toolbar might not exist
+        }
+        
+        // Wait a moment for cleanup
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
+        // Inject the content script
+        await chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ['content.js']
+        });
+        
+        // Wait for script to load
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Start logging - video recording continues in background
+        await chrome.tabs.sendMessage(tabId, {
+            type: 'START_LOGGING',
+            recordingMode: 'video'
+        });
+        
+        console.log('SERVICE WORKER: Content script re-injected successfully (video recording unaffected)');
+        
+    } catch (error) {
+        console.error('SERVICE WORKER: Error re-injecting content script:', error);
+        
+        // Retry once after a short delay
+        try {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ['content.js']
+            });
+            
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+            await chrome.tabs.sendMessage(tabId, {
+                type: 'START_LOGGING',
+                recordingMode: 'video'
+            });
+            
+            console.log('SERVICE WORKER: Content script re-injected successfully on retry');
+        } catch (retryError) {
+            console.error('SERVICE WORKER: Failed to re-inject content script even on retry:', retryError);
+        }
+    }
+}
 
 // Message handler for popup and content script communication
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
@@ -62,7 +175,14 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             break;
             
         case 'VIDEO_RECORDED':
+            console.log('SERVICE WORKER: 📹 VIDEO_RECORDED message received, payload:', message.payload);
             await handleVideoRecorded(message.payload);
+            break;
+            
+        case 'DEBUG_TOOLBAR_ONLY':
+            console.log('SERVICE WORKER: Handling DEBUG_TOOLBAR_ONLY');
+            await debugToolbarOnly();
+            sendResponse({ success: true });
             break;
             
         default:
@@ -76,41 +196,112 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     return true; // Keep message channel open for async response
 });
 
-// Start capture process
-async function startCapture() {
+// Debug function to test only toolbar creation
+async function debugToolbarOnly() {
     try {
-        console.log('Starting capture...');
-        
-        // Clear previous session data FIRST
-        await resetSessionData();
+        console.log('SERVICE WORKER: DEBUG - Testing toolbar only...');
         
         // Set recording state
-        await chrome.storage.session.set({ 
-            [STORAGE_KEYS.RECORDING_STATE]: true,
+        await setRecordingState(true, 'Debug toolbar test started');
+        await chrome.storage.session.set({
             [STORAGE_KEYS.RECORDING_START_TIME]: Date.now()
         });
+        console.log('SERVICE WORKER: DEBUG - ✓ Recording state set');
         
-        // Get the active tab
+        // Get current active tab
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        
         if (!activeTab) {
             throw new Error('No active tab found');
         }
         
-        // Inject content script into the active tab
-        await injectContentScript(activeTab.id);
+        console.log('SERVICE WORKER: DEBUG - ✓ Active tab found:', activeTab.id, activeTab.url);
         
-        // Start network request logging
-        await startNetworkLogging();
+        // Skip video recording and network logging - just inject content script
+        console.log('SERVICE WORKER: DEBUG - Injecting content script...');
+        try {
+            await injectContentScript(activeTab.id);
+            console.log('SERVICE WORKER: DEBUG - ✅ Content script injected successfully');
+        } catch (contentError) {
+            console.error('SERVICE WORKER: DEBUG - ❌ Content script injection failed:', contentError);
+            throw contentError;
+        }
         
-        // Start video recording via offscreen document
-        await startVideoRecording();
-        
-        console.log('Capture started successfully');
+        console.log('SERVICE WORKER: DEBUG - ✅ Toolbar-only test completed successfully');
         
     } catch (error) {
-        console.error('Error starting capture:', error);
-        await chrome.storage.session.set({ [STORAGE_KEYS.RECORDING_STATE]: false });
+        console.error('SERVICE WORKER: DEBUG - ❌ Error in toolbar-only test:', error);
+        
+        // Reset recording state on error
+        await setRecordingState(false, 'Error during debug toolbar test');
+        
+        throw error;
+    }
+}
+
+// Start capture process
+async function startCapture() {
+    try {
+        console.log('SERVICE WORKER: Starting capture process...');
+        
+        // Clear any existing data FIRST
+        await resetSessionData();
+        console.log('SERVICE WORKER: ✓ Session data reset');
+        
+        // Set recording state AFTER clearing data
+        await setRecordingState(true, 'User started recording');
+        await chrome.storage.session.set({
+            [STORAGE_KEYS.RECORDING_START_TIME]: Date.now()
+        });
+        console.log('SERVICE WORKER: ✓ Recording state set');
+        
+        // Get current active tab
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!activeTab) {
+            throw new Error('No active tab found');
+        }
+        
+        console.log('SERVICE WORKER: ✓ Active tab found:', activeTab.id, activeTab.url);
+        
+        // Start video recording FIRST - this is independent of navigation
+        // The offscreen document will handle continuous recording even during navigation
+        console.log('SERVICE WORKER: Starting video recording...');
+        try {
+            await startVideoRecording();
+            console.log('SERVICE WORKER: ✓ Video recording started successfully');
+        } catch (videoError) {
+            console.warn('SERVICE WORKER: ⚠️ Video recording failed, but continuing:', videoError);
+            // Don't fail the whole process if video recording fails
+        }
+        
+        // Start network logging
+        console.log('SERVICE WORKER: Starting network logging...');
+        try {
+            await startNetworkLogging();
+            console.log('SERVICE WORKER: ✓ Network logging started successfully');
+        } catch (networkError) {
+            console.warn('SERVICE WORKER: ⚠️ Network logging failed, but continuing:', networkError);
+            // Don't fail the whole process if network logging fails
+        }
+        
+        // Inject content script for console logging and UI - THIS IS CRITICAL FOR TOOLBAR
+        console.log('SERVICE WORKER: Injecting content script...');
+        try {
+            await injectContentScript(activeTab.id);
+            console.log('SERVICE WORKER: ✓ Content script injected successfully');
+        } catch (contentError) {
+            console.error('SERVICE WORKER: ❌ Content script injection failed:', contentError);
+            // This is critical - if content script fails, we need to know
+            throw contentError;
+        }
+        
+        console.log('SERVICE WORKER: ✅ Capture started successfully');
+        
+    } catch (error) {
+        console.error('SERVICE WORKER: ❌ Error starting capture:', error);
+        
+        // Reset recording state on error
+        await setRecordingState(false, 'Error during startup: ' + error.message);
+        
         throw error;
     }
 }
@@ -121,7 +312,7 @@ async function stopCapture() {
         console.log('SERVICE WORKER: Stopping capture...');
         
         // Set recording state
-        await chrome.storage.session.set({ [STORAGE_KEYS.RECORDING_STATE]: false });
+        await setRecordingState(false, 'User stopped recording');
         console.log('SERVICE WORKER: Recording state set to false');
         
         // Stop network request logging
@@ -161,19 +352,47 @@ async function stopCapture() {
 // Inject content script into active tab
 async function injectContentScript(tabId) {
     try {
+        console.log('SERVICE WORKER: Injecting content script for tab:', tabId);
+        
         await chrome.scripting.executeScript({
             target: { tabId: tabId },
             files: ['content.js']
         });
         
+        // Wait for script to load
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
         // Send start logging message
         await chrome.tabs.sendMessage(tabId, {
-            type: 'START_LOGGING'
+            type: 'START_LOGGING',
+            recordingMode: 'video'
         });
         
+        console.log('SERVICE WORKER: Content script injected and START_LOGGING message sent successfully');
+        
     } catch (error) {
-        console.error('Error injecting content script:', error);
-        throw error;
+        console.error('SERVICE WORKER: Error injecting content script:', error);
+        
+        // Retry once after a short delay
+        try {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ['content.js']
+            });
+            
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+            await chrome.tabs.sendMessage(tabId, {
+                type: 'START_LOGGING',
+                recordingMode: 'video'
+            });
+            
+            console.log('SERVICE WORKER: Content script injected successfully on retry');
+        } catch (retryError) {
+            console.error('SERVICE WORKER: Failed to inject content script even on retry:', retryError);
+            throw retryError;
+        }
     }
 }
 
@@ -298,35 +517,95 @@ async function saveNetworkRequest(request) {
 }
 
 // Utility functions
+// Function to set recording state with logging
+async function setRecordingState(isRecording, reason = 'Unknown') {
+    try {
+        console.log('SERVICE WORKER: 📝 Setting recording state to:', isRecording, 'Reason:', reason);
+        await chrome.storage.session.set({
+            [STORAGE_KEYS.RECORDING_STATE]: isRecording,
+            recordingStateLastChanged: Date.now(),
+            recordingStateChangeReason: reason
+        });
+        console.log('SERVICE WORKER: ✅ Recording state set successfully');
+    } catch (error) {
+        console.error('SERVICE WORKER: ❌ Error setting recording state:', error);
+    }
+}
+
 async function getRecordingState() {
-    const data = await chrome.storage.session.get(STORAGE_KEYS.RECORDING_STATE);
-    return data[STORAGE_KEYS.RECORDING_STATE] || false;
+    try {
+        const serviceWorkerAge = Date.now() - serviceWorkerStartTime;
+        const result = await chrome.storage.session.get([
+            STORAGE_KEYS.RECORDING_STATE, 
+            'recordingStateLastChanged', 
+            'recordingStateChangeReason'
+        ]);
+        const isRecording = result[STORAGE_KEYS.RECORDING_STATE] || false;
+        console.log('SERVICE WORKER: 🔍 getRecordingState called, result:', isRecording, 
+                   'Last changed:', result.recordingStateLastChanged ? new Date(result.recordingStateLastChanged).toISOString() : 'never',
+                   'Reason:', result.recordingStateChangeReason || 'unknown',
+                   'SW age:', Math.round(serviceWorkerAge / 1000) + 's');
+        return isRecording;
+    } catch (error) {
+        console.error('SERVICE WORKER: ❌ Error getting recording state:', error);
+        return false;
+    }
 }
 
 async function getStoredData(key) {
     const data = await chrome.storage.session.get(key);
+    
+    // Debug logging for video data specifically
+    if (key === STORAGE_KEYS.VIDEO_DATA) {
+        console.log('SERVICE WORKER: 🔍 getStoredData debug for VIDEO_DATA:', {
+            key: key,
+            rawData: data,
+            hasKey: key in data,
+            value: data[key],
+            valueType: typeof data[key],
+            valueIsNull: data[key] === null,
+            valueIsUndefined: data[key] === undefined
+        });
+    }
+    
     return data[key];
 }
 
 async function resetSessionData() {
+    console.log('SERVICE WORKER: 🗑️ Resetting session data...');
     await chrome.storage.session.clear();
+    
+    // Clear in-memory video data
+    videoDataInMemory = null;
+    
+    // Use setRecordingState for consistency and tracking
+    await setRecordingState(false, 'Session data reset');
+    
+    // Set other storage keys
     await chrome.storage.session.set({
-        [STORAGE_KEYS.RECORDING_STATE]: false,
         [STORAGE_KEYS.CONSOLE_LOGS]: [],
         [STORAGE_KEYS.NETWORK_LOGS]: [],
         [STORAGE_KEYS.USER_ACTIONS]: [],
         [STORAGE_KEYS.ENVIRONMENT_DATA]: null,
-        [STORAGE_KEYS.VIDEO_DATA]: null
+        [STORAGE_KEYS.VIDEO_DATA]: null,
+        [STORAGE_KEYS.VIDEO_ERROR]: null // Reset video error
     });
+    
+    console.log('SERVICE WORKER: ✅ Session data reset completed');
 }
 
-// Generate and download report
+// Generate report with all collected data
 async function generateReport() {
     try {
         console.log('SERVICE WORKER: Generating report...');
         
+        // Debug: Check all storage data before retrieval
+        const allStorageData = await chrome.storage.session.get();
+        console.log('SERVICE WORKER: 🔍 All storage keys before retrieval:', Object.keys(allStorageData));
+        console.log('SERVICE WORKER: 🔍 VIDEO_DATA exists before retrieval:', STORAGE_KEYS.VIDEO_DATA in allStorageData);
+        
         // Get all collected data
-        const [consoleLogs, networkLogs, userActions, environmentData, videoData] = await Promise.all([
+        const [consoleLogs, networkLogs, userActions, environmentData, videoDataFromStorage] = await Promise.all([
             getStoredData(STORAGE_KEYS.CONSOLE_LOGS),
             getStoredData(STORAGE_KEYS.NETWORK_LOGS),
             getStoredData(STORAGE_KEYS.USER_ACTIONS),
@@ -334,13 +613,78 @@ async function generateReport() {
             getStoredData(STORAGE_KEYS.VIDEO_DATA)
         ]);
         
+        // Handle video data from storage or memory
+        let videoData = null;
+        
+        console.log('SERVICE WORKER: 🔍 Debug videoDataFromStorage:', {
+            value: videoDataFromStorage,
+            type: typeof videoDataFromStorage,
+            isNull: videoDataFromStorage === null,
+            isUndefined: videoDataFromStorage === undefined,
+            truthy: !!videoDataFromStorage
+        });
+        
+        if (videoDataFromStorage) {
+            if (videoDataFromStorage.stored === 'in_memory') {
+                console.log('SERVICE WORKER: 📹 Retrieving video data from memory...');
+                videoData = videoDataInMemory;
+            } else {
+                console.log('SERVICE WORKER: 📹 Using video data from storage...');
+                videoData = videoDataFromStorage;
+            }
+        } else {
+            // Try direct access if getStoredData failed
+            console.log('SERVICE WORKER: 🔍 getStoredData returned null, trying direct access...');
+            const directAccess = await chrome.storage.session.get(STORAGE_KEYS.VIDEO_DATA);
+            const directVideoData = directAccess[STORAGE_KEYS.VIDEO_DATA];
+            
+            console.log('SERVICE WORKER: 🔍 Direct access result:', {
+                hasKey: STORAGE_KEYS.VIDEO_DATA in directAccess,
+                value: directVideoData,
+                type: typeof directVideoData,
+                isInMemory: directVideoData && directVideoData.stored === 'in_memory'
+            });
+            
+            if (directVideoData && directVideoData.stored === 'in_memory') {
+                console.log('SERVICE WORKER: 📹 Found in-memory reference, retrieving from memory...');
+                videoData = videoDataInMemory;
+            } else if (directVideoData && directVideoData.videoData) {
+                console.log('SERVICE WORKER: 📹 Found direct video data...');
+                videoData = directVideoData;
+            }
+        }
+        
+        console.log('SERVICE WORKER: 📹 Video data retrieval:', {
+            fromStorage: !!videoDataFromStorage,
+            fromMemory: !!videoDataInMemory,
+            final: !!videoData,
+            type: videoData ? 'present' : 'null'
+        });
+        
         console.log('SERVICE WORKER: Raw data retrieved:', {
             consoleLogs: consoleLogs ? consoleLogs.length : 'null',
             networkLogs: networkLogs ? networkLogs.length : 'null',
             userActions: userActions ? userActions.length : 'null',
             environmentData: environmentData ? 'present' : 'null',
-            videoData: videoData ? 'present (' + videoData.size + ' bytes)' : 'null'
+            videoData: videoData ? {
+                hasVideoData: !!videoData.videoData,
+                size: videoData.size,
+                mimeType: videoData.mimeType,
+                duration: videoData.duration,
+                videoDataLength: videoData.videoData ? videoData.videoData.length : 'no videoData property'
+            } : 'null'
         });
+        
+        // Debug: Additional check for video data
+        if (!videoData) {
+            console.log('SERVICE WORKER: 🔍 VIDEO_DATA is null, checking direct storage access...');
+            const directVideoData = await chrome.storage.session.get(STORAGE_KEYS.VIDEO_DATA);
+            console.log('SERVICE WORKER: 🔍 Direct video data access:', {
+                hasKey: STORAGE_KEYS.VIDEO_DATA in directVideoData,
+                value: directVideoData[STORAGE_KEYS.VIDEO_DATA] ? 'present' : 'null',
+                valueType: typeof directVideoData[STORAGE_KEYS.VIDEO_DATA]
+            });
+        }
         
         // For Phase 2, create either HTML report with video or JSON fallback
         const reportData = {
@@ -361,16 +705,22 @@ async function generateReport() {
             networkLogs: reportData.networkLogs.length,
             userActions: reportData.userActions.length,
             hasEnvironmentData: !!reportData.environmentData,
-            hasVideoData: !!reportData.videoData
+            hasVideoData: !!reportData.videoData,
+            videoDataDetails: reportData.videoData ? {
+                hasVideoData: !!reportData.videoData.videoData,
+                size: reportData.videoData.size,
+                mimeType: reportData.videoData.mimeType
+            } : null
         });
         
         // Create HTML report if we have video data, otherwise fallback to JSON
-        if (videoData) {
+        if (videoData && videoData.videoData) {
             console.log('SERVICE WORKER: Creating HTML report with video...');
             const htmlReport = createHtmlReport(reportData);
             await downloadViaContentScript(htmlReport, 'html');
         } else {
-            console.log('SERVICE WORKER: No video data, creating JSON report...');
+            console.log('SERVICE WORKER: No video data available, reason:', 
+                videoData ? 'Video data exists but no videoData property' : 'No video data at all');
             const jsonString = JSON.stringify(reportData, null, 2);
             await downloadViaContentScript(jsonString, 'json');
         }
@@ -448,13 +798,21 @@ async function downloadViaContentScript(content, type = 'json') {
 // Video recording functions
 async function startVideoRecording() {
     try {
-        console.log('SERVICE WORKER: Starting video recording...');
+        console.log('SERVICE WORKER: 🎬 Starting video recording...');
         
         // Create offscreen document if it doesn't exist
+        console.log('SERVICE WORKER: 📄 Ensuring offscreen document...');
         await ensureOffscreenDocument();
+        console.log('SERVICE WORKER: ✅ Offscreen document ready');
         
-        // Send start recording message to offscreen document
-        const response = await chrome.runtime.sendMessage({
+        // Wait a moment for the offscreen document to be ready
+        console.log('SERVICE WORKER: ⏰ Waiting 500ms for offscreen document to initialize...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Send start recording message to offscreen document with timeout
+        console.log('SERVICE WORKER: 📤 Sending START_RECORDING message to offscreen document...');
+        
+        const messagePromise = chrome.runtime.sendMessage({
             type: 'START_RECORDING',
             options: {
                 includeSystemAudio: true,
@@ -462,35 +820,51 @@ async function startVideoRecording() {
             }
         });
         
-        if (!response.success) {
-            throw new Error(response.error || 'Failed to start video recording');
+        // Add timeout to prevent hanging
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Video recording start timeout after 10 seconds')), 10000);
+        });
+        
+        const response = await Promise.race([messagePromise, timeoutPromise]);
+        
+        console.log('SERVICE WORKER: 📥 Received response from offscreen document:', response);
+        
+        if (!response || !response.success) {
+            const errorMsg = 'Failed to start video recording: ' + (response?.error || 'Unknown error');
+            console.error('SERVICE WORKER: ❌ Video recording failed:', errorMsg);
+            throw new Error(errorMsg);
         }
         
-        console.log('SERVICE WORKER: Video recording started successfully');
+        console.log('SERVICE WORKER: ✅ Video recording started successfully');
         
     } catch (error) {
-        console.error('SERVICE WORKER: Error starting video recording:', error);
+        console.error('SERVICE WORKER: ❌ Error starting video recording:', error);
         throw error;
     }
 }
 
 async function stopVideoRecording() {
     try {
-        console.log('SERVICE WORKER: Stopping video recording...');
+        console.log('SERVICE WORKER: 🛑 Stopping video recording...');
         
         // Send stop recording message to offscreen document
+        console.log('SERVICE WORKER: 📤 Sending STOP_RECORDING message to offscreen document...');
         const response = await chrome.runtime.sendMessage({
             type: 'STOP_RECORDING'
         });
         
-        if (!response.success) {
-            console.warn('SERVICE WORKER: Failed to stop video recording:', response.error);
+        console.log('SERVICE WORKER: 📥 Received stop response from offscreen document:', response);
+        
+        if (!response || !response.success) {
+            console.warn('SERVICE WORKER: ⚠️ Failed to stop video recording properly:', response?.error || 'Unknown error');
+        } else {
+            console.log('SERVICE WORKER: ✅ Video recording stopped successfully');
         }
         
-        console.log('SERVICE WORKER: Video recording stop signal sent');
+        console.log('SERVICE WORKER: 📋 Video recording stop process completed');
         
     } catch (error) {
-        console.error('SERVICE WORKER: Error stopping video recording:', error);
+        console.error('SERVICE WORKER: ❌ Error stopping video recording:', error);
         // Don't throw error here as we want to continue with report generation
     }
 }
@@ -526,21 +900,63 @@ async function ensureOffscreenDocument() {
 
 async function handleVideoRecorded(videoData) {
     try {
-        console.log('SERVICE WORKER: Video data received:', {
+        console.log('SERVICE WORKER: 📹 Processing video data...');
+        console.log('SERVICE WORKER: Video data structure:', {
+            hasVideoData: !!videoData.videoData,
+            videoDataLength: videoData.videoData ? videoData.videoData.length : 'null',
             size: videoData.size,
             mimeType: videoData.mimeType,
-            duration: videoData.duration
+            duration: videoData.duration,
+            keys: Object.keys(videoData)
         });
         
-        // Store video data in session storage
-        await chrome.storage.session.set({
-            [STORAGE_KEYS.VIDEO_DATA]: videoData
+        // Debug: Check Chrome storage limits
+        const dataSize = JSON.stringify(videoData).length;
+        console.log('SERVICE WORKER: 📊 Video data JSON size:', dataSize, 'bytes');
+        
+        // Chrome storage.session has a quota limit of ~1MB per item
+        const STORAGE_LIMIT = 1024 * 1024; // 1MB
+        if (dataSize > STORAGE_LIMIT) {
+            console.warn('SERVICE WORKER: ⚠️ Video data exceeds storage limit!', {
+                dataSize,
+                limit: STORAGE_LIMIT,
+                ratio: (dataSize / STORAGE_LIMIT).toFixed(2) + 'x'
+            });
+            
+            // Store in memory instead of Chrome storage
+            videoDataInMemory = videoData;
+            console.log('SERVICE WORKER: ✅ Video data stored in memory (too large for Chrome storage)');
+            
+            // Store a reference in Chrome storage
+            await chrome.storage.session.set({
+                [STORAGE_KEYS.VIDEO_DATA]: { stored: 'in_memory', size: dataSize }
+            });
+        } else {
+            // Small enough for Chrome storage
+            await chrome.storage.session.set({
+                [STORAGE_KEYS.VIDEO_DATA]: videoData
+            });
+            console.log('SERVICE WORKER: ✅ Video data stored in session successfully');
+        }
+        
+        // Verify it was stored correctly with more detailed debugging
+        const storedData = await getStoredData(STORAGE_KEYS.VIDEO_DATA);
+        console.log('SERVICE WORKER: 🔍 Verification - stored video data:', {
+            stored: !!storedData,
+            hasVideoData: storedData ? !!storedData.videoData : 'no data',
+            storedDataSize: storedData ? JSON.stringify(storedData).length : 'no data',
+            keys: storedData ? Object.keys(storedData) : 'no data',
+            videoDataType: storedData ? typeof storedData.videoData : 'no data',
+            videoDataLength: storedData && storedData.videoData ? storedData.videoData.length : 'no data'
         });
         
-        console.log('SERVICE WORKER: Video data stored in session');
+        // Additional verification: Try to get all storage data
+        const allStorageData = await chrome.storage.session.get();
+        console.log('SERVICE WORKER: 🔍 All storage keys:', Object.keys(allStorageData));
+        console.log('SERVICE WORKER: 🔍 VIDEO_DATA key exists in storage:', STORAGE_KEYS.VIDEO_DATA in allStorageData);
         
     } catch (error) {
-        console.error('SERVICE WORKER: Error handling video data:', error);
+        console.error('SERVICE WORKER: ❌ Error handling video data:', error);
     }
 }
 

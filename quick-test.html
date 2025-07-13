@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quick BugReel Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f0f8ff;
+        }
+        .test-container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .instructions {
+            background-color: #e8f5e8;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>🚀 Quick BugReel Test</h1>
+        
+        <div class="instructions">
+            <h3>Testing Steps:</h3>
+            <ol>
+                <li><strong>Click "Start Recording"</strong> in the BugReel extension</li>
+                <li><strong>Look for the toolbar</strong> in the top-right corner</li>
+                <li><strong>Test the buttons below</strong> to generate some activity</li>
+                <li><strong>Stop recording</strong> and check if HTML report is generated</li>
+            </ol>
+        </div>
+        
+        <div>
+            <h3>Generate Test Activity:</h3>
+            <button onclick="logInfo()">Log Info</button>
+            <button onclick="logError()">Log Error</button>
+            <button onclick="makeRequest()">Make Request</button>
+            <button onclick="updateStatus()">Update Status</button>
+        </div>
+        
+        <div class="status" id="status">
+            Status: Ready for testing
+        </div>
+    </div>
+
+    <script>
+        console.log('Quick test page loaded at:', new Date().toISOString());
+        
+        let counter = 0;
+        
+        function logInfo() {
+            counter++;
+            console.log(`Test info log #${counter}:`, { timestamp: new Date().toISOString(), counter });
+            updateStatus(`Generated info log #${counter}`);
+        }
+        
+        function logError() {
+            counter++;
+            console.error(`Test error log #${counter}:`, { timestamp: new Date().toISOString(), counter });
+            updateStatus(`Generated error log #${counter}`);
+        }
+        
+        function makeRequest() {
+            counter++;
+            fetch('https://jsonplaceholder.typicode.com/posts/1')
+                .then(response => response.json())
+                .then(data => {
+                    console.log(`Request #${counter} completed:`, data);
+                    updateStatus(`Request #${counter} completed successfully`);
+                })
+                .catch(error => {
+                    console.error(`Request #${counter} failed:`, error);
+                    updateStatus(`Request #${counter} failed`);
+                });
+        }
+        
+        function updateStatus(message) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = `Status: ${message || 'Updated'} (${new Date().toLocaleTimeString()})`;
+        }
+        
+        // Generate initial activity
+        setTimeout(() => {
+            logInfo();
+        }, 1000);
+    </script>
+</body>
+</html> 
