@@ -23,6 +23,226 @@ let offscreenDocumentPromise = null;
 // In-memory storage for large video data (Chrome storage.session has 1MB limit)
 let videoDataInMemory = null;
 
+// PII/Secret Scrubbing Configuration (Phase 3)
+const PII_PATTERNS = {
+    // Header patterns (case insensitive)
+    sensitiveHeaders: [
+        /^authorization$/i,
+        /^x-api-key$/i,
+        /^cookie$/i,
+        /^set-cookie$/i,
+        /^x-auth-token$/i,
+        /^bearer$/i,
+        /^basic$/i,
+        /^api-key$/i,
+        /^access-token$/i,
+        /^refresh-token$/i,
+        /^session-id$/i,
+        /^csrf-token$/i,
+        /^x-csrf-token$/i
+    ],
+    
+    // JSON body key patterns (case insensitive)
+    sensitiveKeys: [
+        /password/i,
+        /passwd/i,
+        /pwd/i,
+        /secret/i,
+        /token/i,
+        /key/i,
+        /auth/i,
+        /credential/i,
+        /signature/i,
+        /hash/i,
+        /salt/i,
+        /nonce/i,
+        /sessionid/i,
+        /session_id/i,
+        /access_token/i,
+        /refresh_token/i,
+        /api_key/i,
+        /private_key/i,
+        /public_key/i,
+        /oauth/i,
+        /jwt/i,
+        /bearer/i,
+        /ssn/i,
+        /social_security/i,
+        /credit_card/i,
+        /creditcard/i,
+        /card_number/i,
+        /cvv/i,
+        /cvc/i,
+        /pin/i,
+        /license/i,
+        /passport/i,
+        /id_number/i
+    ],
+    
+    // Value patterns (exact matches)
+    sensitiveValues: [
+        // JWT tokens
+        /^ey[A-Za-z0-9-_=]+\.ey[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*$/,
+        // AWS access keys
+        /^AKIA[0-9A-Z]{16}$/,
+        // AWS secret keys (40 chars base64)
+        /^[A-Za-z0-9/+=]{40}$/,
+        // Generic API keys (32+ alphanumeric chars)
+        /^[A-Za-z0-9]{32,}$/,
+        // Credit card patterns
+        /^\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}$/,
+        // SSN patterns
+        /^\d{3}-?\d{2}-?\d{4}$/,
+        // Email patterns (in some contexts might be PII)
+        /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
+        // Phone numbers
+        /^(\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}$/,
+        // UUIDs (sometimes used as secrets)
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    ],
+    
+    // URL patterns for sensitive data
+    sensitiveUrlPatterns: [
+        /[?&](password|pwd|token|key|secret|auth|credential)=[^&]+/gi,
+        /[?&](access_token|refresh_token|api_key|session_id)=[^&]+/gi,
+        /[?&](oauth|jwt|bearer)=[^&]+/gi
+    ]
+};
+
+const PII_REPLACEMENT = '[REDACTED]';
+
+// PII Scrubbing Functions (Phase 3)
+function scrubPiiFromString(text) {
+    if (typeof text !== 'string') {
+        return text;
+    }
+    
+    let scrubbedText = text;
+    
+    // Scrub based on value patterns
+    PII_PATTERNS.sensitiveValues.forEach(pattern => {
+        scrubbedText = scrubbedText.replace(pattern, PII_REPLACEMENT);
+    });
+    
+    return scrubbedText;
+}
+
+function scrubPiiFromObject(obj, depth = 0) {
+    if (depth > 10) {
+        return obj; // Prevent infinite recursion
+    }
+    
+    if (obj === null || obj === undefined) {
+        return obj;
+    }
+    
+    if (typeof obj === 'string') {
+        return scrubPiiFromString(obj);
+    }
+    
+    if (typeof obj === 'number' || typeof obj === 'boolean') {
+        return obj;
+    }
+    
+    if (Array.isArray(obj)) {
+        return obj.map(item => scrubPiiFromObject(item, depth + 1));
+    }
+    
+    if (typeof obj === 'object') {
+        const scrubbedObj = {};
+        
+        for (const [key, value] of Object.entries(obj)) {
+            const lowerKey = key.toLowerCase();
+            
+            // Check if key matches sensitive patterns
+            const isSensitiveKey = PII_PATTERNS.sensitiveKeys.some(pattern => pattern.test(lowerKey));
+            
+            if (isSensitiveKey) {
+                scrubbedObj[key] = PII_REPLACEMENT;
+            } else {
+                scrubbedObj[key] = scrubPiiFromObject(value, depth + 1);
+            }
+        }
+        
+        return scrubbedObj;
+    }
+    
+    return obj;
+}
+
+function scrubPiiFromHeaders(headers) {
+    if (!headers || !Array.isArray(headers)) {
+        return headers;
+    }
+    
+    return headers.map(header => {
+        const headerName = header.name ? header.name.toLowerCase() : '';
+        const isSensitive = PII_PATTERNS.sensitiveHeaders.some(pattern => pattern.test(headerName));
+        
+        return {
+            name: header.name,
+            value: isSensitive ? PII_REPLACEMENT : header.value
+        };
+    });
+}
+
+function scrubPiiFromUrl(url) {
+    if (typeof url !== 'string') {
+        return url;
+    }
+    
+    let scrubbedUrl = url;
+    
+    // Scrub sensitive URL parameters
+    PII_PATTERNS.sensitiveUrlPatterns.forEach(pattern => {
+        scrubbedUrl = scrubbedUrl.replace(pattern, (match, param) => {
+            return match.replace(/=[^&]+/, `=${PII_REPLACEMENT}`);
+        });
+    });
+    
+    return scrubbedUrl;
+}
+
+function scrubPiiFromNetworkRequest(request) {
+    if (!request) {
+        return request;
+    }
+    
+    return {
+        ...request,
+        url: scrubPiiFromUrl(request.url),
+        requestHeaders: scrubPiiFromHeaders(request.requestHeaders),
+        responseHeaders: scrubPiiFromHeaders(request.responseHeaders),
+        requestBody: request.requestBody ? scrubPiiFromObject(request.requestBody) : request.requestBody,
+        responseBody: request.responseBody ? scrubPiiFromObject(request.responseBody) : request.responseBody
+    };
+}
+
+function scrubPiiFromConsoleLog(log) {
+    if (!log) {
+        return log;
+    }
+    
+    return {
+        ...log,
+        message: scrubPiiFromString(log.message),
+        args: log.args ? scrubPiiFromObject(log.args) : log.args
+    };
+}
+
+function scrubPiiFromUserAction(action) {
+    if (!action) {
+        return action;
+    }
+    
+    return {
+        ...action,
+        text: action.text ? scrubPiiFromString(action.text) : action.text,
+        value: action.value ? scrubPiiFromString(action.value) : action.value,
+        url: action.url ? scrubPiiFromUrl(action.url) : action.url
+    };
+}
+
 // Initialize storage
 chrome.runtime.onInstalled.addListener(async () => {
     await resetSessionData();
@@ -496,13 +716,17 @@ function onErrorOccurred(details) {
 // Data handling functions
 async function handleConsoleLog(logData) {
     const logs = await getStoredData(STORAGE_KEYS.CONSOLE_LOGS) || [];
-    logs.push(logData);
+    // Apply PII scrubbing (Phase 3)
+    const scrubbedLog = scrubPiiFromConsoleLog(logData);
+    logs.push(scrubbedLog);
     await chrome.storage.session.set({ [STORAGE_KEYS.CONSOLE_LOGS]: logs });
 }
 
 async function handleUserAction(actionData) {
     const actions = await getStoredData(STORAGE_KEYS.USER_ACTIONS) || [];
-    actions.push(actionData);
+    // Apply PII scrubbing (Phase 3)
+    const scrubbedAction = scrubPiiFromUserAction(actionData);
+    actions.push(scrubbedAction);
     await chrome.storage.session.set({ [STORAGE_KEYS.USER_ACTIONS]: actions });
 }
 
@@ -512,7 +736,9 @@ async function handleEnvironmentData(envData) {
 
 async function saveNetworkRequest(request) {
     const requests = await getStoredData(STORAGE_KEYS.NETWORK_LOGS) || [];
-    requests.push(request);
+    // Apply PII scrubbing (Phase 3)
+    const scrubbedRequest = scrubPiiFromNetworkRequest(request);
+    requests.push(scrubbedRequest);
     await chrome.storage.session.set({ [STORAGE_KEYS.NETWORK_LOGS]: requests });
 }
 
@@ -695,8 +921,8 @@ async function generateReport() {
             environmentData: environmentData || {},
             videoData: videoData || null,
             metadata: {
-                version: '1.0.0',
-                phase: 'Phase 2 - Video Recording & Self-Contained Viewer'
+                version: '2.0.0',
+                phase: 'Phase 3 - Enhanced Synchronization, PII Scrubbing & Interactive Viewer'
             }
         };
         
@@ -1080,6 +1306,89 @@ function createHtmlReport(reportData) {
             display: block;
         }
         
+        /* Enhanced Controls Section (Phase 3) */
+        .controls-section {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .search-container {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            position: relative;
+        }
+        
+        #search-input {
+            flex: 1;
+            padding: 8px 40px 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+        }
+        
+        #search-input:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+        
+        #clear-search {
+            position: absolute;
+            right: 8px;
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        
+        #clear-search:hover {
+            background: #e9ecef;
+            color: #495057;
+        }
+        
+        .filter-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+        
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .filter-group label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #495057;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .filter-group select {
+            padding: 6px 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 13px;
+            background: white;
+            cursor: pointer;
+        }
+        
+        .filter-group select:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+        
         .log-entry {
             margin-bottom: 10px;
             padding: 10px;
@@ -1114,6 +1423,19 @@ function createHtmlReport(reportData) {
             border-left-color: #ffc107;
             transform: scale(1.02);
             box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .log-entry.active-sync {
+            background-color: #e3f2fd;
+            border-left-color: #2196f3;
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(33, 150, 243, 0.3);
+            animation: pulseSync 1s ease-in-out;
+        }
+        
+        @keyframes pulseSync {
+            0%, 100% { box-shadow: 0 4px 12px rgba(33, 150, 243, 0.3); }
+            50% { box-shadow: 0 6px 20px rgba(33, 150, 243, 0.5); }
         }
         
         .timestamp {
@@ -1199,6 +1521,26 @@ function createHtmlReport(reportData) {
             border-left-color: #ffc107;
         }
         
+        .user-action.active-sync {
+            background-color: #e8f5e8;
+            border-left-color: #4caf50;
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+            animation: pulseSync 1s ease-in-out;
+        }
+        
+        .network-request.highlight {
+            transform: scale(1.01);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .network-request.active-sync {
+            transform: scale(1.02);
+            box-shadow: 0 4px 16px rgba(255, 152, 0, 0.3);
+            border-left-width: 6px;
+            animation: pulseSync 1s ease-in-out;
+        }
+        
         .environment-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -1230,6 +1572,124 @@ function createHtmlReport(reportData) {
             font-style: italic;
         }
         
+        /* Timeline Visualization Styles (Phase 3) */
+        .timeline-markers {
+            margin-top: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .timeline-track {
+            position: relative;
+            height: 60px;
+        }
+        
+        .timeline-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .timeline-label {
+            padding: 2px 8px;
+            border-radius: 12px;
+            color: white;
+            font-size: 10px;
+        }
+        
+        .timeline-label.errors {
+            background: #e74c3c;
+        }
+        
+        .timeline-label.network {
+            background: #f39c12;
+        }
+        
+        .timeline-label.actions {
+            background: #27ae60;
+        }
+        
+        .timeline-bars {
+            position: relative;
+            height: 40px;
+            background: #ecf0f1;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .timeline-bar {
+            position: absolute;
+            width: 100%;
+            height: 12px;
+        }
+        
+        .error-bar {
+            top: 2px;
+        }
+        
+        .network-bar {
+            top: 16px;
+        }
+        
+        .action-bar {
+            top: 30px;
+        }
+        
+        .timeline-marker {
+            position: absolute;
+            width: 3px;
+            height: 100%;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .timeline-marker:hover {
+            width: 5px;
+            z-index: 10;
+        }
+        
+        .error-marker {
+            background: #e74c3c;
+            box-shadow: 0 0 4px rgba(231, 76, 60, 0.5);
+        }
+        
+        .network-marker {
+            background: #f39c12;
+            box-shadow: 0 0 4px rgba(243, 156, 18, 0.5);
+        }
+        
+        .action-marker {
+            background: #27ae60;
+            box-shadow: 0 0 4px rgba(39, 174, 96, 0.5);
+        }
+        
+        .timeline-position-indicator {
+            position: absolute;
+            top: 0;
+            width: 2px;
+            height: 100%;
+            background: #2196f3;
+            box-shadow: 0 0 6px rgba(33, 150, 243, 0.8);
+            z-index: 20;
+            transition: left 0.1s ease-out;
+        }
+        
+        .timeline-position-indicator::before {
+            content: '';
+            position: absolute;
+            top: -5px;
+            left: -3px;
+            width: 8px;
+            height: 8px;
+            background: #2196f3;
+            border-radius: 50%;
+            box-shadow: 0 0 8px rgba(33, 150, 243, 0.8);
+        }
+        
         @media (max-width: 768px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -1237,6 +1697,35 @@ function createHtmlReport(reportData) {
             
             .container {
                 padding: 10px;
+            }
+            
+            .timeline-markers {
+                margin-top: 10px;
+                padding: 8px;
+            }
+            
+            .timeline-track {
+                height: 50px;
+            }
+            
+            .timeline-bars {
+                height: 30px;
+            }
+            
+            .timeline-bar {
+                height: 8px;
+            }
+            
+            .error-bar {
+                top: 2px;
+            }
+            
+            .network-bar {
+                top: 12px;
+            }
+            
+            .action-bar {
+                top: 22px;
             }
         }
     </style>
@@ -1281,6 +1770,47 @@ function createHtmlReport(reportData) {
                     <div class="tab" data-tab="network">Network (${reportData.networkLogs.length})</div>
                     <div class="tab" data-tab="actions">Actions (${reportData.userActions.length})</div>
                     <div class="tab" data-tab="environment">Environment</div>
+                </div>
+                
+                <!-- Enhanced Search and Filter Controls (Phase 3) -->
+                <div class="controls-section">
+                    <div class="search-container">
+                        <input type="text" id="search-input" placeholder="Search logs, requests, or actions..." />
+                        <button id="clear-search" title="Clear search">✕</button>
+                    </div>
+                    <div class="filter-container">
+                        <div class="filter-group">
+                            <label>Log Level:</label>
+                            <select id="log-level-filter">
+                                <option value="">All Levels</option>
+                                <option value="error">Errors</option>
+                                <option value="warn">Warnings</option>
+                                <option value="info">Info</option>
+                                <option value="debug">Debug</option>
+                                <option value="log">Logs</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Status:</label>
+                            <select id="status-filter">
+                                <option value="">All Status</option>
+                                <option value="2xx">Success (2xx)</option>
+                                <option value="3xx">Redirect (3xx)</option>
+                                <option value="4xx">Client Error (4xx)</option>
+                                <option value="5xx">Server Error (5xx)</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Time Range:</label>
+                            <select id="time-filter">
+                                <option value="">All Time</option>
+                                <option value="first-10">First 10s</option>
+                                <option value="first-30">First 30s</option>
+                                <option value="last-10">Last 10s</option>
+                                <option value="last-30">Last 30s</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="tab-content active" id="console">
@@ -1419,9 +1949,17 @@ function createHtmlReport(reportData) {
             }
         }
         
-        // Video synchronization
+        // Enhanced Video Synchronization (Phase 3)
+        const reportData = JSON.parse(document.getElementById('report-data').textContent);
         const video = document.getElementById('mainVideo');
-        if (video) {
+        let recordingStartTime = null;
+        let isUserSeeking = false;
+        
+        if (video && reportData) {
+            // Calculate recording start time from report metadata
+            const reportTimestamp = new Date(reportData.timestamp);
+            recordingStartTime = reportTimestamp.getTime();
+            
             video.addEventListener('loadedmetadata', () => {
                 const duration = Math.floor(video.duration);
                 const minutes = Math.floor(duration / 60);
@@ -1429,38 +1967,393 @@ function createHtmlReport(reportData) {
                 document.getElementById('videoDuration').textContent = 
                     minutes.toString().padStart(2, '0') + ':' + 
                     seconds.toString().padStart(2, '0');
+                
+                // Initialize timeline markers
+                initializeTimelineMarkers();
+            });
+            
+            // Handle seeking detection
+            video.addEventListener('seeking', () => {
+                isUserSeeking = true;
+            });
+            
+            video.addEventListener('seeked', () => {
+                setTimeout(() => {
+                    isUserSeeking = false;
+                }, 100);
             });
             
             video.addEventListener('timeupdate', () => {
-                const currentTime = video.currentTime;
-                const currentTimestamp = new Date(Date.now() - (video.duration - currentTime) * 1000).toISOString();
-                
-                // Highlight relevant logs and actions
-                highlightRelevantData(currentTimestamp);
+                if (!isUserSeeking) {
+                    const currentVideoTime = video.currentTime;
+                    // Calculate the actual timestamp based on video position
+                    const currentTimestamp = new Date(recordingStartTime + (currentVideoTime * 1000));
+                    
+                    // Enhanced synchronization with better algorithm
+                    synchronizeContent(currentTimestamp, currentVideoTime);
+                }
             });
         }
         
-        function highlightRelevantData(currentTimestamp) {
-            // Remove previous highlights
-            document.querySelectorAll('.highlight').forEach(el => {
-                el.classList.remove('highlight');
-            });
+        function initializeTimelineMarkers() {
+            // Add timeline visualization
+            const videoContainer = document.querySelector('.video-container');
+            if (videoContainer && video) {
+                const timeline = document.createElement('div');
+                timeline.className = 'timeline-markers';
+                timeline.innerHTML = '<div class="timeline-track">' +
+                    '<div class="timeline-labels">' +
+                        '<span class="timeline-label errors">Errors</span>' +
+                        '<span class="timeline-label network">Network</span>' +
+                        '<span class="timeline-label actions">Actions</span>' +
+                    '</div>' +
+                    '<div class="timeline-bars">' +
+                        '<div class="timeline-bar error-bar" id="error-timeline"></div>' +
+                        '<div class="timeline-bar network-bar" id="network-timeline"></div>' +
+                        '<div class="timeline-bar action-bar" id="action-timeline"></div>' +
+                    '</div>' +
+                '</div>';
+                videoContainer.appendChild(timeline);
+                
+                // Populate timeline markers
+                populateTimelineMarkers();
+            }
+        }
+        
+        function populateTimelineMarkers() {
+            if (!video || !recordingStartTime) return;
             
-            // Find and highlight relevant entries within a 2-second window
-            const currentTime = new Date(currentTimestamp).getTime();
-            const tolerance = 2000; // 2 seconds
+            const videoDuration = video.duration;
+            const errorBar = document.getElementById('error-timeline');
+            const networkBar = document.getElementById('network-timeline');
+            const actionBar = document.getElementById('action-timeline');
             
-            document.querySelectorAll('[data-timestamp]').forEach(element => {
-                const elementTime = new Date(element.dataset.timestamp).getTime();
-                if (Math.abs(currentTime - elementTime) < tolerance) {
-                    element.classList.add('highlight');
+            if (!errorBar || !networkBar || !actionBar) return;
+            
+            // Clear existing markers
+            [errorBar, networkBar, actionBar].forEach(bar => bar.innerHTML = '');
+            
+            // Add error markers
+            reportData.consoleLogs.filter(log => log.level === 'error').forEach(log => {
+                const logTime = new Date(log.timestamp).getTime();
+                const relativeTime = (logTime - recordingStartTime) / 1000;
+                if (relativeTime >= 0 && relativeTime <= videoDuration) {
+                    const position = (relativeTime / videoDuration) * 100;
+                    const marker = document.createElement('div');
+                    marker.className = 'timeline-marker error-marker';
+                    marker.style.left = position + '%';
+                    marker.title = 'Error at ' + formatTime(relativeTime) + ': ' + log.message.substring(0, 50) + '...';
+                    errorBar.appendChild(marker);
                 }
             });
+            
+            // Add network error markers
+            reportData.networkLogs.filter(req => req.statusCode >= 400).forEach(req => {
+                const reqTime = new Date(req.timestamp).getTime();
+                const relativeTime = (reqTime - recordingStartTime) / 1000;
+                if (relativeTime >= 0 && relativeTime <= videoDuration) {
+                    const position = (relativeTime / videoDuration) * 100;
+                    const marker = document.createElement('div');
+                    marker.className = 'timeline-marker network-marker';
+                    marker.style.left = position + '%';
+                    marker.title = req.method + ' ' + req.url + ' - ' + req.statusCode + ' at ' + formatTime(relativeTime);
+                    networkBar.appendChild(marker);
+                }
+            });
+            
+            // Add user action markers
+            reportData.userActions.forEach(action => {
+                const actionTime = new Date(action.timestamp).getTime();
+                const relativeTime = (actionTime - recordingStartTime) / 1000;
+                if (relativeTime >= 0 && relativeTime <= videoDuration) {
+                    const position = (relativeTime / videoDuration) * 100;
+                    const marker = document.createElement('div');
+                    marker.className = 'timeline-marker action-marker';
+                    marker.style.left = position + '%';
+                    marker.title = action.type + ' on ' + action.selector + ' at ' + formatTime(relativeTime);
+                    actionBar.appendChild(marker);
+                }
+            });
+        }
+        
+        function synchronizeContent(currentTimestamp, videoTime) {
+            // Remove previous highlights
+            document.querySelectorAll('.highlight, .active-sync').forEach(el => {
+                el.classList.remove('highlight', 'active-sync');
+            });
+            
+            const currentTime = currentTimestamp.getTime();
+            const tolerance = 1500; // 1.5 seconds tolerance
+            const strictTolerance = 500; // 0.5 seconds for exact matches
+            
+            let foundExactMatch = false;
+            let relevantElements = [];
+            
+            // Find all timestamped elements
+            document.querySelectorAll('[data-timestamp]').forEach(element => {
+                const elementTime = new Date(element.dataset.timestamp).getTime();
+                const timeDiff = Math.abs(currentTime - elementTime);
+                
+                if (timeDiff < strictTolerance) {
+                    element.classList.add('active-sync');
+                    relevantElements.push({ element, timeDiff, priority: 'high' });
+                    foundExactMatch = true;
+                } else if (timeDiff < tolerance) {
+                    element.classList.add('highlight');
+                    relevantElements.push({ element, timeDiff, priority: 'low' });
+                }
+            });
+            
+            // Auto-scroll to most relevant content
+            if (relevantElements.length > 0) {
+                // Sort by time difference (closest first)
+                relevantElements.sort((a, b) => a.timeDiff - b.timeDiff);
+                const mostRelevant = relevantElements[0];
+                
+                // Only scroll if we have a high priority match or user isn't actively browsing
+                if (mostRelevant.priority === 'high' || !isUserInteracting()) {
+                    scrollToElement(mostRelevant.element);
+                }
+            }
+            
+            // Update timeline position indicator
+            updateTimelinePosition(videoTime);
+        }
+        
+        function updateTimelinePosition(videoTime) {
+            const videoDuration = video ? video.duration : 0;
+            if (videoDuration > 0) {
+                const position = (videoTime / videoDuration) * 100;
+                
+                // Update or create position indicator
+                let indicator = document.getElementById('timeline-position');
+                if (!indicator) {
+                    indicator = document.createElement('div');
+                    indicator.id = 'timeline-position';
+                    indicator.className = 'timeline-position-indicator';
+                    const timelineTrack = document.querySelector('.timeline-track');
+                    if (timelineTrack) {
+                        timelineTrack.appendChild(indicator);
+                    }
+                }
+                
+                if (indicator) {
+                    indicator.style.left = position + '%';
+                }
+            }
+        }
+        
+        function scrollToElement(element) {
+            if (element && element.scrollIntoView) {
+                element.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                    inline: 'nearest'
+                });
+            }
+        }
+        
+        function isUserInteracting() {
+            // Simple heuristic to detect if user is actively scrolling or interacting
+            return document.querySelector('.data-section:hover') !== null;
+        }
+        
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return mins.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
+        }
+        
+        // Enhanced Search and Filter Functionality (Phase 3)
+        function initializeSearchAndFilters() {
+            const searchInput = document.getElementById('search-input');
+            const clearSearch = document.getElementById('clear-search');
+            const logLevelFilter = document.getElementById('log-level-filter');
+            const statusFilter = document.getElementById('status-filter');
+            const timeFilter = document.getElementById('time-filter');
+            
+            // Search functionality
+            if (searchInput) {
+                searchInput.addEventListener('input', debounce(performSearch, 300));
+            }
+            
+            if (clearSearch) {
+                clearSearch.addEventListener('click', () => {
+                    searchInput.value = '';
+                    performSearch();
+                });
+            }
+            
+            // Filter functionality
+            [logLevelFilter, statusFilter, timeFilter].forEach(filter => {
+                if (filter) {
+                    filter.addEventListener('change', applyFilters);
+                }
+            });
+        }
+        
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+        
+        function performSearch() {
+            const searchTerm = document.getElementById('search-input')?.value.toLowerCase() || '';
+            const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+            
+            if (!searchTerm) {
+                // Show all items if search is empty
+                showAllItems();
+                return;
+            }
+            
+            // Search in console logs
+            if (activeTab === 'console') {
+                document.querySelectorAll('#console .log-entry').forEach(entry => {
+                    const message = entry.querySelector('.message')?.textContent.toLowerCase() || '';
+                    const timestamp = entry.querySelector('.timestamp')?.textContent.toLowerCase() || '';
+                    
+                    if (message.includes(searchTerm) || timestamp.includes(searchTerm)) {
+                        entry.style.display = 'block';
+                        highlightSearchTerm(entry, searchTerm);
+                    } else {
+                        entry.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Search in network requests
+            if (activeTab === 'network') {
+                document.querySelectorAll('#network .network-request').forEach(request => {
+                    const url = request.querySelector('.request-url')?.textContent.toLowerCase() || '';
+                    const method = request.querySelector('.request-method')?.textContent.toLowerCase() || '';
+                    const status = request.querySelector('.status-code')?.textContent.toLowerCase() || '';
+                    
+                    if (url.includes(searchTerm) || method.includes(searchTerm) || status.includes(searchTerm)) {
+                        request.style.display = 'block';
+                        highlightSearchTerm(request, searchTerm);
+                    } else {
+                        request.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Search in user actions
+            if (activeTab === 'actions') {
+                document.querySelectorAll('#actions .user-action').forEach(action => {
+                    const text = action.textContent.toLowerCase();
+                    
+                    if (text.includes(searchTerm)) {
+                        action.style.display = 'block';
+                        highlightSearchTerm(action, searchTerm);
+                    } else {
+                        action.style.display = 'none';
+                    }
+                });
+            }
+        }
+        
+        function highlightSearchTerm(element, searchTerm) {
+            // Remove existing highlights
+            const walker = document.createTreeWalker(
+                element,
+                NodeFilter.SHOW_TEXT,
+                null,
+                false
+            );
+            
+            const textNodes = [];
+            let node;
+            while (node = walker.nextNode()) {
+                textNodes.push(node);
+            }
+            
+            textNodes.forEach(textNode => {
+                if (textNode.textContent.toLowerCase().includes(searchTerm)) {
+                    const span = document.createElement('span');
+                                         span.innerHTML = textNode.textContent.replace(
+                         new RegExp('(' + escapeRegex(searchTerm) + ')', 'gi'),
+                         '<mark style="background: #ffeb3b; padding: 1px 2px;">$1</mark>'
+                     );
+                    textNode.parentNode.replaceChild(span, textNode);
+                }
+            });
+        }
+        
+        function escapeRegex(string) {
+            return string.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+        }
+        
+        function showAllItems() {
+            document.querySelectorAll('.log-entry, .network-request, .user-action').forEach(item => {
+                item.style.display = 'block';
+                // Remove search highlights
+                item.querySelectorAll('mark').forEach(mark => {
+                    mark.replaceWith(mark.textContent);
+                });
+            });
+        }
+        
+        function applyFilters() {
+            const logLevel = document.getElementById('log-level-filter')?.value || '';
+            const status = document.getElementById('status-filter')?.value || '';
+            const timeRange = document.getElementById('time-filter')?.value || '';
+            const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+            
+            if (activeTab === 'console' && logLevel) {
+                document.querySelectorAll('#console .log-entry').forEach(entry => {
+                    if (entry.classList.contains(logLevel)) {
+                        entry.style.display = 'block';
+                    } else {
+                        entry.style.display = 'none';
+                    }
+                });
+            }
+            
+            if (activeTab === 'network' && status) {
+                document.querySelectorAll('#network .network-request').forEach(request => {
+                    const statusCode = request.querySelector('.status-code')?.textContent || '';
+                    const statusClass = getStatusClass(parseInt(statusCode));
+                    
+                    if (statusClass === status) {
+                        request.style.display = 'block';
+                    } else {
+                        request.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Apply time filters if needed
+            if (timeRange) {
+                applyTimeFilter(timeRange);
+            }
+        }
+        
+        function getStatusClass(statusCode) {
+            if (statusCode >= 200 && statusCode < 300) return '2xx';
+            if (statusCode >= 300 && statusCode < 400) return '3xx';
+            if (statusCode >= 400 && statusCode < 500) return '4xx';
+            if (statusCode >= 500) return '5xx';
+            return '';
+        }
+        
+        function applyTimeFilter(range) {
+            // Implementation would depend on having recording start time
+            // This is a placeholder for time-based filtering
+            console.log('Time filter:', range);
         }
         
         // Initialize
         console.log('BugReel Report Viewer loaded');
         console.log('Report data:', JSON.parse(document.getElementById('report-data').textContent));
+        initializeSearchAndFilters();
     </script>
 </body>
 </html>`;
