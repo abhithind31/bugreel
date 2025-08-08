@@ -399,10 +399,67 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             await handleVideoRecorded(message.payload);
             break;
             
+        case 'VIDEO_ERROR':
+            console.error('SERVICE WORKER: 🚨 VIDEO_ERROR message received:', message.payload);
+            await handleVideoError(message.payload);
+            break;
+            
         case 'DEBUG_TOOLBAR_ONLY':
             console.log('SERVICE WORKER: Handling DEBUG_TOOLBAR_ONLY');
             await debugToolbarOnly();
             sendResponse({ success: true });
+            break;
+            
+        case 'SAVE_REPORT':
+            console.log('SERVICE WORKER: Handling SAVE_REPORT');
+            await saveReportFromPreview(message.notes);
+            sendResponse({ success: true });
+            break;
+            
+        case 'CANCEL_PREVIEW':
+            console.log('SERVICE WORKER: Handling CANCEL_PREVIEW');
+            await cancelPreview();
+            sendResponse({ success: true });
+            break;
+            
+        case 'RESTART_RECORDING':
+            console.log('SERVICE WORKER: Handling RESTART_RECORDING');
+            await restartRecording();
+            sendResponse({ success: true });
+            break;
+            
+        case 'TEST_VIDEO_RECORDING':
+            console.log('SERVICE WORKER: Handling TEST_VIDEO_RECORDING');
+            try {
+                await startVideoRecording();
+                sendResponse({ success: true });
+                // Stop the recording immediately after starting
+                setTimeout(async () => {
+                    try {
+                        await stopVideoRecording();
+                        console.log('SERVICE WORKER: Test video recording stopped');
+                    } catch (error) {
+                        console.error('SERVICE WORKER: Error stopping test recording:', error);
+                    }
+                }, 1000);
+            } catch (error) {
+                console.error('SERVICE WORKER: Test video recording failed:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+            break;
+            
+        case 'PING':
+            sendResponse({ success: true, pong: true });
+            break;
+            
+        case 'PING_OFFSCREEN':
+            try {
+                await ensureOffscreenDocument();
+                const response = await chrome.runtime.sendMessage({ type: 'PING_OFFSCREEN' });
+                sendResponse({ success: true, offscreen: response });
+            } catch (error) {
+                sendResponse({ success: false, error: error.message });
+            }
             break;
             
         default:
@@ -489,7 +546,18 @@ async function startCapture() {
             await startVideoRecording();
             console.log('SERVICE WORKER: ✓ Video recording started successfully');
         } catch (videoError) {
-            console.warn('SERVICE WORKER: ⚠️ Video recording failed, but continuing:', videoError);
+            console.error('SERVICE WORKER: ❌ Video recording failed:', videoError);
+            
+            // Store the error for debugging
+            await chrome.storage.session.set({
+                [STORAGE_KEYS.VIDEO_ERROR]: {
+                    message: videoError.message,
+                    stack: videoError.stack,
+                    timestamp: new Date().toISOString()
+                }
+            });
+            
+            console.warn('SERVICE WORKER: ⚠️ Video recording failed, but continuing with data-only capture');
             // Don't fail the whole process if video recording fails
         }
         
@@ -556,12 +624,28 @@ async function stopCapture() {
             }
         }
         
-        // Generate and download report
-        console.log('SERVICE WORKER: About to generate report...');
-        await generateReport();
-        console.log('SERVICE WORKER: Report generation completed');
+        // Set flag to generate preview after video processing
+        console.log('SERVICE WORKER: Capture stopped successfully. Waiting for video processing...');
         
-        console.log('SERVICE WORKER: Capture stopped successfully');
+        // Store a flag that we need to generate preview after video processing
+        await chrome.storage.session.set({
+            waitingForVideoProcessing: true
+        });
+        
+        // Set a timeout to generate preview even if no video data is received
+        setTimeout(async () => {
+            try {
+                const data = await chrome.storage.session.get('waitingForVideoProcessing');
+                if (data.waitingForVideoProcessing) {
+                    console.log('SERVICE WORKER: ⏰ Video processing timeout - generating preview without video');
+                    await chrome.storage.session.remove('waitingForVideoProcessing');
+                    await generatePreview();
+                    console.log('SERVICE WORKER: 📋 Preview generation completed (timeout)');
+                }
+            } catch (error) {
+                console.error('SERVICE WORKER: Error in video processing timeout:', error);
+            }
+        }, 3000); // 3 second timeout
         
     } catch (error) {
         console.error('SERVICE WORKER: Error stopping capture:', error);
@@ -943,18 +1027,102 @@ async function generateReport() {
         if (videoData && videoData.videoData) {
             console.log('SERVICE WORKER: Creating HTML report with video...');
             const htmlReport = createHtmlReport(reportData);
-            await downloadViaContentScript(htmlReport, 'html');
+            await downloadViaDownloadsApi(htmlReport, 'html');
         } else {
             console.log('SERVICE WORKER: No video data available, reason:', 
                 videoData ? 'Video data exists but no videoData property' : 'No video data at all');
             const jsonString = JSON.stringify(reportData, null, 2);
-            await downloadViaContentScript(jsonString, 'json');
+            await downloadViaDownloadsApi(jsonString, 'json');
         }
         
         console.log('SERVICE WORKER: Report generated successfully');
         
     } catch (error) {
         console.error('SERVICE WORKER: Error generating report:', error);
+        throw error;
+    }
+}
+
+// Generate preview window with all collected data
+async function generatePreview() {
+    try {
+        console.log('SERVICE WORKER: Generating preview...');
+        
+        // Get all collected data including video error info
+        const [consoleLogs, networkLogs, userActions, environmentData, videoDataFromStorage, videoError] = await Promise.all([
+            getStoredData(STORAGE_KEYS.CONSOLE_LOGS),
+            getStoredData(STORAGE_KEYS.NETWORK_LOGS),
+            getStoredData(STORAGE_KEYS.USER_ACTIONS),
+            getStoredData(STORAGE_KEYS.ENVIRONMENT_DATA),
+            getStoredData(STORAGE_KEYS.VIDEO_DATA),
+            getStoredData(STORAGE_KEYS.VIDEO_ERROR)
+        ]);
+        
+        // Handle video data from storage or memory
+        let videoData = null;
+        
+        if (videoDataFromStorage) {
+            if (videoDataFromStorage.stored === 'in_memory') {
+                console.log('SERVICE WORKER: 📹 Retrieving video data from memory for preview...');
+                videoData = videoDataInMemory;
+            } else {
+                console.log('SERVICE WORKER: 📹 Using video data from storage for preview...');
+                videoData = videoDataFromStorage;
+            }
+        } else {
+            // Try direct access if getStoredData failed
+            const directAccess = await chrome.storage.session.get(STORAGE_KEYS.VIDEO_DATA);
+            const directVideoData = directAccess[STORAGE_KEYS.VIDEO_DATA];
+            
+            if (directVideoData && directVideoData.stored === 'in_memory') {
+                console.log('SERVICE WORKER: 📹 Found in-memory reference for preview...');
+                videoData = videoDataInMemory;
+            } else if (directVideoData && directVideoData.videoData) {
+                console.log('SERVICE WORKER: 📹 Found direct video data for preview...');
+                videoData = directVideoData;
+            }
+        }
+        
+        // Prepare preview data
+        const previewData = {
+            timestamp: new Date().toISOString(),
+            consoleLogs: consoleLogs || [],
+            networkLogs: networkLogs || [],
+            userActions: userActions || [],
+            environmentData: environmentData || {},
+            videoData: videoData || null,
+            videoError: videoError || null,
+            metadata: {
+                version: '2.1.0',
+                phase: 'Phase 3 - Enhanced Synchronization, PII Scrubbing & Interactive Viewer'
+            }
+        };
+        
+        console.log('SERVICE WORKER: Preview data prepared:', {
+            consoleLogs: previewData.consoleLogs.length,
+            networkLogs: previewData.networkLogs.length,
+            userActions: previewData.userActions.length,
+            hasEnvironmentData: !!previewData.environmentData,
+            hasVideoData: !!previewData.videoData,
+            videoDataDetails: previewData.videoData ? {
+                hasVideoData: !!previewData.videoData.videoData,
+                size: previewData.videoData.size,
+                mimeType: previewData.videoData.mimeType,
+                duration: previewData.videoData.duration
+            } : null
+        });
+        
+        // Create preview HTML and store it for the dedicated extension preview page
+        const previewHtml = createPreviewHtml(previewData);
+        await chrome.storage.session.set({ PREVIEW_HTML: previewHtml });
+
+        // Open dedicated extension preview page where chrome APIs are available
+        const previewUrl = chrome.runtime.getURL('preview.html');
+        const previewTab = await chrome.tabs.create({ url: previewUrl, active: true });
+        console.log('SERVICE WORKER: Preview tab created (extension page):', previewTab.id);
+        
+    } catch (error) {
+        console.error('SERVICE WORKER: Error generating preview:', error);
         throw error;
     }
 }
@@ -1017,8 +1185,26 @@ async function downloadViaContentScript(content, type = 'json') {
         
     } catch (error) {
         console.error('SERVICE WORKER: Download via content script failed:', error);
-        throw error;
+        // Fallback: use downloads API from service worker with data URL
+        try {
+            await downloadViaDownloadsApi(content, type);
+            console.log('SERVICE WORKER: Fallback download via downloads API succeeded');
+        } catch (fallbackError) {
+            console.error('SERVICE WORKER: Fallback download failed:', fallbackError);
+            throw fallbackError;
+        }
     }
+}
+
+async function downloadViaDownloadsApi(content, type = 'json') {
+    const mimeType = type === 'html' ? 'text/html' : 'application/json';
+    const extension = type === 'html' ? 'html' : 'json';
+    const dataUrl = 'data:' + mimeType + ';charset=utf-8,' + encodeURIComponent(content);
+    await chrome.downloads.download({
+        url: dataUrl,
+        filename: `bugreel-report-${Date.now()}.${extension}`,
+        saveAs: true
+    });
 }
 
 // Video recording functions
@@ -1031,32 +1217,48 @@ async function startVideoRecording() {
         await ensureOffscreenDocument();
         console.log('SERVICE WORKER: ✅ Offscreen document ready');
         
-        // Wait a moment for the offscreen document to be ready
-        console.log('SERVICE WORKER: ⏰ Waiting 500ms for offscreen document to initialize...');
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Wait longer for the offscreen document to be ready
+        console.log('SERVICE WORKER: ⏰ Waiting 1000ms for offscreen document to initialize...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         // Send start recording message to offscreen document with timeout
         console.log('SERVICE WORKER: 📤 Sending START_RECORDING message to offscreen document...');
         
-        const messagePromise = chrome.runtime.sendMessage({
-            type: 'START_RECORDING',
-            options: {
-                includeSystemAudio: true,
-                includeMicrophone: true
-            }
+        const messagePromise = new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({
+                type: 'START_RECORDING',
+                options: {
+                    includeSystemAudio: true,
+                    includeMicrophone: true
+                }
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error('SERVICE WORKER: 🚨 Chrome runtime error:', chrome.runtime.lastError);
+                    reject(new Error(`Chrome runtime error: ${chrome.runtime.lastError.message}`));
+                } else {
+                    console.log('SERVICE WORKER: 📨 Raw response from offscreen:', response);
+                    resolve(response);
+                }
+            });
         });
         
         // Add timeout to prevent hanging
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Video recording start timeout after 10 seconds')), 10000);
+            setTimeout(() => reject(new Error('Video recording start timeout after 15 seconds')), 15000);
         });
         
         const response = await Promise.race([messagePromise, timeoutPromise]);
         
         console.log('SERVICE WORKER: 📥 Received response from offscreen document:', response);
         
-        if (!response || !response.success) {
-            const errorMsg = 'Failed to start video recording: ' + (response?.error || 'Unknown error');
+        if (!response) {
+            const errorMsg = 'Failed to start video recording: No response from offscreen document';
+            console.error('SERVICE WORKER: ❌ Video recording failed:', errorMsg);
+            throw new Error(errorMsg);
+        }
+        
+        if (!response.success) {
+            const errorMsg = 'Failed to start video recording: ' + (response.error || 'Offscreen document reported failure without error message');
             console.error('SERVICE WORKER: ❌ Video recording failed:', errorMsg);
             throw new Error(errorMsg);
         }
@@ -1112,11 +1314,15 @@ async function ensureOffscreenDocument() {
         console.log('SERVICE WORKER: Creating offscreen document...');
         await chrome.offscreen.createDocument({
             url: 'offscreen.html',
-            reasons: ['USER_MEDIA'],
-            justification: 'Recording screen and audio for bug reports'
+            reasons: ['DISPLAY_MEDIA', 'USER_MEDIA'],
+            justification: 'Recording screen and microphone for bug reports'
         });
         
         console.log('SERVICE WORKER: Offscreen document created successfully');
+        
+        // Wait a moment for the offscreen document to fully initialize
+        console.log('SERVICE WORKER: ⏰ Waiting 500ms for offscreen document to fully initialize...');
+        await new Promise(resolve => setTimeout(resolve, 500));
         
     } catch (error) {
         console.error('SERVICE WORKER: Error creating offscreen document:', error);
@@ -1181,8 +1387,39 @@ async function handleVideoRecorded(videoData) {
         console.log('SERVICE WORKER: 🔍 All storage keys:', Object.keys(allStorageData));
         console.log('SERVICE WORKER: 🔍 VIDEO_DATA key exists in storage:', STORAGE_KEYS.VIDEO_DATA in allStorageData);
         
+        // Check if we're waiting for video processing to complete before generating preview
+        if (allStorageData.waitingForVideoProcessing) {
+            console.log('SERVICE WORKER: ✅ Video processing complete. Generating preview...');
+            
+            // Remove the flag
+            await chrome.storage.session.remove('waitingForVideoProcessing');
+            
+            // Generate preview now that video data is available
+            await generatePreview();
+            console.log('SERVICE WORKER: 📋 Preview generation completed');
+        }
+        
     } catch (error) {
         console.error('SERVICE WORKER: ❌ Error handling video data:', error);
+    }
+}
+
+async function handleVideoError(errorData) {
+    try {
+        console.error('SERVICE WORKER: 🚨 Processing video error:', errorData);
+        
+        // Store the comprehensive error information
+        await chrome.storage.session.set({
+            [STORAGE_KEYS.VIDEO_ERROR]: {
+                ...errorData,
+                receivedAt: new Date().toISOString()
+            }
+        });
+        
+        console.log('SERVICE WORKER: ✅ Video error stored for debugging');
+        
+    } catch (error) {
+        console.error('SERVICE WORKER: ❌ Error storing video error:', error);
     }
 }
 
@@ -1219,20 +1456,38 @@ function createHtmlReport(reportData) {
         
         .header {
             background: white;
-            padding: 20px;
+            padding: 12px 16px;
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-        }
-        
-        .header h1 {
-            color: #2c3e50;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
         
         .header .meta {
             color: #7f8c8d;
             font-size: 14px;
+        }
+        
+        .notes-section {
+            background: #f8f9fa;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+        }
+        
+        .notes-section h2 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .notes-content {
+            color: #495057;
+            line-height: 1.6;
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
         
         .main-content {
@@ -1733,13 +1988,19 @@ function createHtmlReport(reportData) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎬 BugReel Report</h1>
             <div class="meta">
-                Generated: ${new Date(reportData.timestamp).toLocaleString()} | 
-                Version: ${reportData.metadata.version} | 
-                Phase: ${reportData.metadata.phase}
+                Generated: ${new Date(reportData.timestamp).toLocaleString()}
             </div>
         </div>
+        
+        ${reportData.notes ? `
+        <div class="notes-section">
+            <h2>📝 Notes</h2>
+            <div class="notes-content">
+                ${escapeHtml(reportData.notes).replace(/\n/g, '<br>')}
+            </div>
+        </div>
+        ` : ''}
         
         <div class="main-content">
             <div class="video-section">
@@ -2370,4 +2631,536 @@ function createHtmlReport(reportData) {
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
     }
+}
+
+// Save report from preview with optional notes
+async function saveReportFromPreview(notes = '') {
+    try {
+        console.log('SERVICE WORKER: Saving report from preview with notes:', notes);
+        
+        // Get all collected data (same as generateReport)
+        const [consoleLogs, networkLogs, userActions, environmentData, videoDataFromStorage] = await Promise.all([
+            getStoredData(STORAGE_KEYS.CONSOLE_LOGS),
+            getStoredData(STORAGE_KEYS.NETWORK_LOGS),
+            getStoredData(STORAGE_KEYS.USER_ACTIONS),
+            getStoredData(STORAGE_KEYS.ENVIRONMENT_DATA),
+            getStoredData(STORAGE_KEYS.VIDEO_DATA)
+        ]);
+        
+        // Handle video data from storage or memory
+        let videoData = null;
+        
+        if (videoDataFromStorage) {
+            if (videoDataFromStorage.stored === 'in_memory') {
+                videoData = videoDataInMemory;
+            } else {
+                videoData = videoDataFromStorage;
+            }
+        } else {
+            const directAccess = await chrome.storage.session.get(STORAGE_KEYS.VIDEO_DATA);
+            const directVideoData = directAccess[STORAGE_KEYS.VIDEO_DATA];
+            
+            if (directVideoData && directVideoData.stored === 'in_memory') {
+                videoData = videoDataInMemory;
+            } else if (directVideoData && directVideoData.videoData) {
+                videoData = directVideoData;
+            }
+        }
+        
+        // Create final report data with notes
+        const reportData = {
+            timestamp: new Date().toISOString(),
+            consoleLogs: consoleLogs || [],
+            networkLogs: networkLogs || [],
+            userActions: userActions || [],
+            environmentData: environmentData || {},
+            videoData: videoData || null,
+            notes: notes || '', // Include user notes
+            metadata: {
+                version: '2.1.0',
+                phase: 'Phase 3 - Enhanced Synchronization, PII Scrubbing & Interactive Viewer',
+                previewUsed: true
+            }
+        };
+        
+        console.log('SERVICE WORKER: Final report data prepared with notes');
+        
+        // Create HTML report if we have video data, otherwise fallback to JSON
+        if (videoData && videoData.videoData) {
+            console.log('SERVICE WORKER: Creating HTML report with video and notes...');
+            const htmlReport = createHtmlReport(reportData);
+            await downloadViaContentScript(htmlReport, 'html');
+        } else {
+            console.log('SERVICE WORKER: No video data available, creating JSON report with notes...');
+            const jsonString = JSON.stringify(reportData, null, 2);
+            await downloadViaContentScript(jsonString, 'json');
+        }
+        
+        // Clean up session data after successful save
+        await resetSessionData();
+        
+        console.log('SERVICE WORKER: Report saved successfully from preview');
+        
+    } catch (error) {
+        console.error('SERVICE WORKER: Error saving report from preview:', error);
+        throw error;
+    }
+}
+
+// Cancel preview and clean up data
+async function cancelPreview() {
+    try {
+        console.log('SERVICE WORKER: Cancelling preview and cleaning up data...');
+        
+        // Reset all session data
+        await resetSessionData();
+        
+        console.log('SERVICE WORKER: Preview cancelled and data cleaned up');
+        
+    } catch (error) {
+        console.error('SERVICE WORKER: Error cancelling preview:', error);
+        throw error;
+    }
+}
+
+// Restart recording by cleaning up data and starting fresh
+async function restartRecording() {
+    try {
+        console.log('SERVICE WORKER: Restarting recording...');
+        
+        // Reset all session data
+        await resetSessionData();
+        
+        // Start a new capture
+        await startCapture();
+        
+        console.log('SERVICE WORKER: Recording restarted successfully');
+        
+    } catch (error) {
+        console.error('SERVICE WORKER: Error restarting recording:', error);
+        throw error;
+    }
+}
+
+// Create preview HTML for review before saving
+function createPreviewHtml(previewData) {
+    const videoDataUrl = previewData.videoData && previewData.videoData.videoData ? 
+        'data:' + previewData.videoData.mimeType + ';base64,' + previewData.videoData.videoData : null;
+    
+    return `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BugReel Preview - ${new Date(previewData.timestamp).toLocaleString()}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8f9fa;
+            color: #212529;
+            line-height: 1.6;
+        }
+        
+        .preview-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .preview-header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .preview-header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            color: #2c3e50;
+        }
+        
+        .preview-header p {
+            font-size: 1.2em;
+            color: #6c757d;
+            margin-bottom: 20px;
+        }
+        
+        .preview-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+        
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .btn-save {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-save:hover {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+        
+        .btn-cancel {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-cancel:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+        
+        .btn-restart {
+            background: #ffc107;
+            color: #212529;
+        }
+        
+        .btn-restart:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
+        }
+        
+        .preview-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .video-section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .video-section h2 {
+            margin-bottom: 20px;
+            color: #2c3e50;
+            font-size: 1.5em;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        
+        .video-player {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        
+        .video-info {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        
+        .data-summary {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .data-summary h2 {
+            margin-bottom: 20px;
+            color: #2c3e50;
+            font-size: 1.5em;
+        }
+        
+        .summary-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+        }
+        
+        .summary-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .summary-item.console-logs {
+            border-left-color: #dc3545;
+        }
+        
+        .summary-item.network-logs {
+            border-left-color: #ffc107;
+        }
+        
+        .summary-item.user-actions {
+            border-left-color: #28a745;
+        }
+        
+        .summary-label {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .summary-count {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #6c757d;
+        }
+        
+        .notes-section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        
+        .notes-section h2 {
+            margin-bottom: 20px;
+            color: #2c3e50;
+            font-size: 1.5em;
+        }
+        
+        .notes-textarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 15px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            resize: vertical;
+            transition: border-color 0.3s ease;
+        }
+        
+        .notes-textarea:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+        
+        .no-video-message {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6c757d;
+            font-size: 1.1em;
+        }
+        
+        .no-video-message i {
+            font-size: 4em;
+            margin-bottom: 20px;
+            display: block;
+        }
+        
+        .error-details {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: left;
+            color: #721c24;
+        }
+        
+        .error-message {
+            font-family: monospace;
+            font-weight: bold;
+            margin: 10px 0;
+            padding: 10px;
+            background: rgba(0,0,0,0.1);
+            border-radius: 4px;
+        }
+        
+        .error-time {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-bottom: 15px;
+        }
+        
+        .error-stack {
+            margin-top: 15px;
+        }
+        
+        .error-stack summary {
+            cursor: pointer;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .error-stack pre {
+            background: rgba(0,0,0,0.1);
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .diagnostic-info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: left;
+            color: #0c5460;
+        }
+        
+        .diagnostic-info ul {
+            margin: 15px 0;
+            padding-left: 0;
+            list-style: none;
+        }
+        
+        .diagnostic-info li {
+            margin: 8px 0;
+            padding: 5px 0;
+        }
+        
+        .fallback-note {
+            margin-top: 20px;
+            font-style: italic;
+            opacity: 0.8;
+        }
+        
+        @media (max-width: 768px) {
+            .preview-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .preview-actions {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                max-width: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="preview-container">
+        <div class="preview-header">
+            <h1>🎬 BugReel Preview</h1>
+            <p>Review your recording before saving the final report</p>
+            <p style="font-size: 0.9em; color: #6c757d;">
+                Captured on ${new Date(previewData.timestamp).toLocaleString()}
+            </p>
+        </div>
+        
+        <!-- Action buttons removed; outer extension page provides controls -->
+        
+        <div class="preview-content">
+            <div class="video-section">
+                <h2>📹 Recorded Video</h2>
+                ${videoDataUrl ? `
+                    <div class="video-container">
+                        <video class="video-player" controls>
+                            <source src="${videoDataUrl}" type="${previewData.videoData.mimeType}">
+                            Your browser does not support the video tag.
+                        </video>
+                        <div class="video-info">
+                            <strong>Duration:</strong> ${previewData.videoData.duration ? (previewData.videoData.duration / 1000).toFixed(1) + 's' : 'Unknown'}<br>
+                            <strong>Size:</strong> ${previewData.videoData.size ? (previewData.videoData.size / 1024 / 1024).toFixed(1) + ' MB' : 'Unknown'}<br>
+                            <strong>Format:</strong> ${previewData.videoData.mimeType || 'Unknown'}
+                        </div>
+                    </div>
+                ` : `
+                    <div class="no-video-message">
+                        <i>📹</i>
+                        <p><strong>No video recording available</strong></p>
+                        ${previewData.videoError ? `
+                            <div class="error-details">
+                                <p><strong>🚨 Recording Error:</strong></p>
+                                <p class="error-message">${previewData.videoError.message}</p>
+                                <p class="error-time">Failed at: ${new Date(previewData.videoError.timestamp).toLocaleString()}</p>
+                                <details class="error-stack">
+                                    <summary>Technical Details</summary>
+                                    <pre>${previewData.videoError.stack || 'No stack trace available'}</pre>
+                                </details>
+                            </div>
+                        ` : `
+                            <div class="diagnostic-info">
+                                <p><strong>🔍 Possible Causes:</strong></p>
+                                <ul>
+                                    <li>• User denied screen sharing permission</li>
+                                    <li>• Browser doesn't support screen recording</li>
+                                    <li>• Extension lacks required permissions</li>
+                                    <li>• Recording failed to start or stopped unexpectedly</li>
+                                </ul>
+                                <p><strong>📝 Check browser console for detailed error messages</strong></p>
+                            </div>
+                        `}
+                        <p class="fallback-note">The report will be saved as JSON format instead</p>
+                    </div>
+                `}
+            </div>
+            
+            <div class="data-summary">
+                <h2>📊 Captured Data Summary</h2>
+                <div class="summary-item console-logs">
+                    <span class="summary-label">📝 Console Logs</span>
+                    <span class="summary-count">${previewData.consoleLogs.length}</span>
+                </div>
+                <div class="summary-item network-logs">
+                    <span class="summary-label">🌐 Network Requests</span>
+                    <span class="summary-count">${previewData.networkLogs.length}</span>
+                </div>
+                <div class="summary-item user-actions">
+                    <span class="summary-label">🖱️ User Actions</span>
+                    <span class="summary-count">${previewData.userActions.length}</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">💻 Environment Data</span>
+                    <span class="summary-count">${previewData.environmentData && Object.keys(previewData.environmentData).length > 0 ? '✓' : '✗'}</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="notes-section">
+            <h2>📝 Add Notes (Optional)</h2>
+            <textarea 
+                class="notes-textarea" 
+                id="reportNotes" 
+                placeholder="Add any additional notes, bug description, or context that will be included in the final report..."
+            ></textarea>
+        </div>
+    </div>
+    
+    <script>
+        // No inline actions; handled by outer extension page
+    </script>
+</body>
+</html>`;
 } 

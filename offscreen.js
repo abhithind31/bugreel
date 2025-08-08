@@ -56,6 +56,11 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
                 sendResponse({ success: true });
                 break;
                 
+            case 'PING_OFFSCREEN':
+                console.log('OFFSCREEN: Ping received');
+                sendResponse({ success: true, pong: true });
+                break;
+                
             default:
                 console.warn('OFFSCREEN: Unknown message type:', message.type);
                 sendResponse({ success: false, error: 'Unknown message type' });
@@ -163,6 +168,16 @@ async function startRecording(options = {}) {
         mediaRecorder.onerror = (event) => {
             console.error('OFFSCREEN: MediaRecorder error:', event.error);
             updateStatus('Recording error: ' + event.error);
+            
+            // Send error details to service worker
+            chrome.runtime.sendMessage({
+                type: 'VIDEO_ERROR',
+                payload: {
+                    source: 'MediaRecorder',
+                    error: event.error.toString(),
+                    timestamp: new Date().toISOString()
+                }
+            }).catch(err => console.error('Failed to send error to service worker:', err));
         };
         
         // Start recording
@@ -181,6 +196,21 @@ async function startRecording(options = {}) {
     } catch (error) {
         console.error('OFFSCREEN: Error starting recording:', error);
         updateStatus('Error: ' + error.message);
+        
+        // Send error details to service worker with more context
+        const errorDetails = {
+            source: 'StartRecording',
+            error: error.message,
+            name: error.name,
+            stack: error.stack,
+            timestamp: new Date().toISOString(),
+            permissionDenied: error.name === 'NotAllowedError' || error.message.includes('Permission denied')
+        };
+        
+        chrome.runtime.sendMessage({
+            type: 'VIDEO_ERROR',
+            payload: errorDetails
+        }).catch(err => console.error('Failed to send error to service worker:', err));
         
         // Clean up any partially created streams
         if (displayStream) {
@@ -322,6 +352,19 @@ async function processRecordedVideo() {
     } catch (error) {
         console.error('OFFSCREEN: Error processing video:', error);
         updateStatus('Error processing video: ' + error.message);
+        
+        // Send error details to service worker
+        chrome.runtime.sendMessage({
+            type: 'VIDEO_ERROR',
+            payload: {
+                source: 'ProcessVideo',
+                error: error.message,
+                name: error.name,
+                stack: error.stack,
+                timestamp: new Date().toISOString(),
+                chunksCount: recordedChunks ? recordedChunks.length : 0
+            }
+        }).catch(err => console.error('Failed to send error to service worker:', err));
     }
 }
 

@@ -32,7 +32,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["offscreen.html"],
+      "resources": ["offscreen.html", "preview.html", "preview.js"],
       "matches": ["<all_urls>"]
     }
   ]

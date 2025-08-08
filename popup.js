@@ -26,8 +26,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                 recordingMode: recordingMode
             });
             
-            // Update UI immediately
-            updateUIState(true);
+            // Update UI immediately (clear preview mode)
+            updateUIState(true, false);
             
         } catch (error) {
             console.error('POPUP: Error starting capture:', error);
@@ -49,8 +49,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             
             console.log('POPUP: Stop capture response:', response);
             
-            // Update UI immediately
-            updateUIState(false);
+            // Update UI to show preview mode
+            updateUIState(false, true);
             
         } catch (error) {
             console.error('POPUP: Error stopping capture:', error);
@@ -88,7 +88,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     });
     
     // Update UI state based on recording status
-    async function updateUIState(forceRecording = null) {
+    async function updateUIState(forceRecording = null, previewMode = false) {
         let isRecording = forceRecording;
         
         if (isRecording === null) {
@@ -104,13 +104,22 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
         
-        if (isRecording) {
+        if (previewMode) {
+            // Preview mode - recording stopped, preview is open
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            statusDiv.innerHTML = '👁️ Preview open - Check the preview tab to save your report';
+            statusDiv.className = 'status preview';
+            recordingInfo.style.display = 'none';
+        } else if (isRecording) {
+            // Recording in progress
             startBtn.disabled = true;
             stopBtn.disabled = false;
             statusDiv.innerHTML = '<span class="recording-indicator"></span>Recording current tab...';
             statusDiv.className = 'status recording';
             recordingInfo.style.display = 'block';
         } else {
+            // Idle state - ready to record
             startBtn.disabled = false;
             stopBtn.disabled = true;
             statusDiv.textContent = 'Ready to record current tab';
@@ -122,7 +131,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Listen for messages from service worker (in case state changes)
     chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
         if (message.type === 'RECORDING_STATE_CHANGED') {
-            updateUIState(message.isRecording);
+            updateUIState(message.isRecording, message.previewMode);
         }
     });
 }); 
