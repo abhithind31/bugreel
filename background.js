@@ -414,6 +414,14 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             await saveReportFromPreview(message.notes);
             sendResponse({ success: true });
             break;
+        case 'GET_ENVIRONMENT_DATA':
+            try {
+                const env = await getStoredData(STORAGE_KEYS.ENVIRONMENT_DATA);
+                sendResponse({ success: true, environmentData: env });
+            } catch (e) {
+                sendResponse({ success: false, error: e.message });
+            }
+            break;
             
         case 'CANCEL_PREVIEW':
             console.log('SERVICE WORKER: Handling CANCEL_PREVIEW');
