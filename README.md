@@ -1,174 +1,140 @@
-# 🎬 BugReel - Personal Bug Reporting Tool
+# 🎬 BugReel — Record bugs that developers can actually fix
 
-A personal-use browser extension for capturing comprehensive bug reports with console logs, network requests, user actions, and environment data.
+BugReel is a Chrome extension that captures a short screen recording and the developer context around it — console logs, network requests, user actions, and environment details — and saves a single self‑contained HTML report you can share.
 
-## 🚀 Project Overview
-
-BugReel is inspired by tools like Jam.dev but designed specifically for personal use. It captures detailed debugging information into self-contained reports without requiring any backend infrastructure or cloud services.
-
-### Key Features (Current Implementation - Phase 3)
-
-✅ **Console Log Capture**: Intercepts and records all console.log, console.error, console.warn, console.info, and console.debug messages  
-✅ **Network Request Logging**: Captures HTTP requests with headers, status codes, timing, and metadata  
-✅ **User Action Tracking**: Records clicks, keyboard inputs, and navigation events for reproduction steps  
-✅ **Environment Data Collection**: Gathers browser, OS, screen resolution, and page metadata  
-✅ **Advanced PII Scrubbing**: Comprehensive client-side scrubbing of passwords, tokens, API keys, and sensitive data  
-✅ **Screen Recording**: Captures tab/screen video with system and microphone audio  
-✅ **Audio Merging**: Combines system audio and microphone using Web Audio API  
-✅ **Self-Contained HTML Reports**: Interactive reports with embedded video and synchronized playback  
-✅ **Enhanced Timeline Synchronization**: Advanced algorithm with visual timeline markers and precise highlighting  
-✅ **Interactive Search & Filtering**: Real-time search across logs, requests, and actions with multiple filter options  
-✅ **Visual Timeline Markers**: Interactive timeline showing errors, network issues, and user actions  
-✅ **Smart Auto-scrolling**: Intelligent content synchronization with video playback  
-
-### Planned Features (Future Phases)
-
-🔄 **Phase 4**: AI-powered debugging assistance and screenshot annotation  
-
-## 📋 Installation
-
-### Load Extension in Chrome
-
-1. Open Chrome and navigate to `chrome://extensions/`
-2. Enable "Developer mode" in the top right
-3. Click "Load unpacked" and select this project directory
-4. The BugReel extension should now appear in your extensions list
-
-## 🔧 How to Use
-
-1. **Navigate to any webpage** you want to debug
-2. **Click the BugReel extension icon** in your browser toolbar
-3. **Click "Start Recording"** to begin capturing data
-   - Grant screen sharing permissions when prompted
-   - Optionally allow microphone access for narration
-4. **Reproduce the bug** by interacting with the page
-5. **Click "Stop Recording"** when done
-6. **An HTML report file** will be automatically downloaded with:
-   - Embedded video recording
-   - Synchronized console logs, network requests, and user actions
-   - Interactive timeline that highlights relevant data as video plays
-
-## 📊 Report Contents
-
-The generated JSON report contains:
-
-```json
-{
-  "timestamp": "2024-01-15T10:30:00.000Z",
-  "consoleLogs": [
-    {
-      "level": "error",
-      "message": "TypeError: Cannot read property 'foo' of undefined",
-      "timestamp": "2024-01-15T10:30:05.123Z",
-      "url": "https://example.com/page"
-    }
-  ],
-  "networkLogs": [
-    {
-      "url": "https://api.example.com/data",
-      "method": "POST",
-      "statusCode": 500,
-      "duration": 1234,
-      "requestHeaders": [...],
-      "responseHeaders": [...]
-    }
-  ],
-  "userActions": [
-    {
-      "type": "click",
-      "selector": "#submit-button",
-      "timestamp": "2024-01-15T10:30:03.456Z",
-      "text": "Submit Form"
-    }
-  ],
-  "environmentData": {
-    "userAgent": "Mozilla/5.0...",
-    "screen": { "width": 1920, "height": 1080 },
-    "viewport": { "width": 1200, "height": 800 },
-    "url": "https://example.com"
-  }
-}
-```
-
-## 🏗️ Architecture
-
-### Extension Components
-
-- **manifest.json**: Extension configuration and permissions
-- **popup.html/js**: User interface for start/stop controls
-- **background.js**: Service worker coordinating all data capture
-- **content.js**: Script injected into web pages for data collection
-
-### Data Flow
-
-1. User clicks "Start Recording" in popup
-2. Service worker injects content script into active tab
-3. Content script overrides console methods and adds event listeners
-4. Service worker captures network requests via webRequest API
-5. All data is aggregated in session storage
-6. On "Stop Recording", data is compiled into JSON report and downloaded
-
-## 🛠️ Development Status
-
-### Phase 1: Core Capture Foundation ✅ COMPLETE
-
-- [x] Chrome Extension V3 structure
-- [x] Console log interception
-- [x] Network request capturing
-- [x] User action tracking
-- [x] Environment data collection
-- [x] JSON report generation
-
-### Phase 2: Video Recording & Self-Contained Viewer ✅ COMPLETE
-
-- [x] Offscreen document for screen capture
-- [x] MediaRecorder integration with getDisplayMedia
-- [x] Audio stream merging (system + microphone)
-- [x] Self-contained HTML viewer with embedded video
-- [x] Basic timeline synchronization
-- [x] Interactive tabbed interface
-
-### Phase 3: Interactive Viewer ✅ COMPLETE
-
-- [x] Enhanced timeline synchronization with visual markers
-- [x] Comprehensive PII/secret scrubbing module
-- [x] Interactive search and filtering functionality
-- [x] Visual timeline with error/network/action markers
-- [x] Smart auto-scrolling and content highlighting
-- [x] Enhanced UI/UX with modern controls
-
-### Phase 4: Advanced Features
-
-- [ ] AI debugging assistant
-- [ ] Screenshot annotation
-- [ ] Advanced report formats
-
-## 🔒 Privacy & Security
-
-- **No data transmission**: All processing happens locally in your browser
-- **No cloud storage**: Reports are saved only to your local machine
-- **PII protection**: Passwords and sensitive inputs are automatically masked
-- **Session-only storage**: Data is cleared when browser session ends
-
-## 🤝 Contributing
-
-This is designed as a personal tool, but contributions are welcome! Areas for improvement:
-
-- Enhanced error handling
-- Better UI/UX for the popup
-- Additional capture capabilities
-- Performance optimizations
-
-## 📜 License
-
-MIT License - See LICENSE file for details
-
-## 🙏 Acknowledgments
-
-Inspired by [Jam.dev](https://jam.dev) and similar bug reporting tools, but reimagined for personal use without the complexity of collaborative features.
+No servers. No accounts. Everything runs locally in your browser.
 
 ---
 
-**Current Version**: 2.1.0 (Phase 3)  
-**Last Updated**: January 2024  
-**Status**: Enhanced interactive viewer with timeline synchronization, PII scrubbing, and advanced search capabilities 
+## ✨ Highlights
+
+- Screen and microphone recording (tab audio supported)
+- Floating, minimal toolbar (pause/resume, mic toggle, tab‑audio toggle). Bottom‑center and draggable
+- Console logs, network requests, user actions, and environment data captured alongside video
+- Powerful search and filters in the report (log level, status code buckets, time range, text search)
+- Privacy‑minded defaults with client‑side PII scrubbing
+- Reports are self‑contained HTML files (video embedded) — easy to attach to tickets or share
+
+---
+
+## 🚀 Quick start (Chrome)
+
+1. Open `chrome://extensions/`
+2. Enable “Developer mode” (top‑right)
+3. Click “Load unpacked” and select the project folder
+4. Pin the extension for easy access (optional)
+
+Recording a bug:
+- Click the BugReel icon → “Start Tab Recording”
+- In the screen picker, choose “Chrome Tab” and check “Share tab audio” if you want tab sound
+- Reproduce the issue
+- Use the floating toolbar to pause/resume, toggle mic/tab‑audio, or stop
+- A dark preview page opens → Save Report (downloads the self‑contained HTML)
+
+---
+
+## 🧭 What gets captured
+
+- Video: your active tab (with optional tab audio and microphone)
+- Console: `error`, `warn`, `log`, `info`, `debug` (timestamped)
+- Network: URL, method, status, timing, request/response headers
+- Actions: clicks, keydown, inputs (sanitized), simple selectors
+- Environment: user agent, platform, screen + viewport size, page title/URL
+
+All data stays local; nothing is sent anywhere.
+
+---
+
+## 🧰 The floating toolbar
+
+- Stop: ends the recording and opens the preview
+- Pause/Resume: toggles MediaRecorder pause state and freezes the on‑screen timer
+- Mic: toggles microphone capture
+- Sound: toggles tab/system audio
+
+The toolbar spawns bottom‑center and can be dragged to the edge you prefer.
+
+Notes on permissions:
+- To capture tab audio, pick “Chrome Tab” and check “Share tab audio” in the picker
+- Your first run may prompt for microphone access if you enable mic capture
+
+---
+
+## 📝 The preview and the saved report
+
+After stopping, a preview page opens with three actions: Save Report, Start New Recording, Close.
+
+The final report is a single HTML file (dark theme) that includes:
+- Embedded video
+- Tabs for Console, Network, Actions, and Environment
+- Search box and filters: log level, status bucket (2xx/3xx/4xx/5xx), time range
+- A Notes field captured from the preview page
+
+There’s no external dependency; you can open the report offline.
+
+---
+
+## 🔒 Privacy & security
+
+- No cloud uploads by default; everything is processed and stored locally
+- Session‑only Chrome storage during capture
+- Best‑effort PII masking: common secret patterns and password‑like inputs are scrubbed
+
+You control what gets shared by sending (or not sending) the HTML file.
+
+---
+
+## 🧪 Troubleshooting
+
+Tab audio isn’t in the recording:
+- In the screen picker, select the “Chrome Tab” and check “Share tab audio”
+
+Mic didn’t record:
+- Ensure the mic button was enabled on the toolbar and grant mic permission when prompted
+
+Video shows “Unknown/Infinity” duration:
+- We removed the duration field in the report UI to avoid misleading values from some encoders. The embedded player still knows the real duration
+
+Preview opens but nothing appears in Network/Console tabs:
+- Navigate within the same tab while recording (not a new window)
+- Some extensions or strict corporate policies can block `webRequest` logging
+
+---
+
+## 🏗️ Project structure
+
+- `manifest.json` — Extension configuration and permissions
+- `popup.html` / `popup.js` — Minimal popup to start a recording
+- `background.js` — Service worker orchestrating capture and report generation
+- `offscreen.html` / `offscreen.js` — Offscreen document that runs the recorder
+- `content.js` — Injected into the page to collect logs/actions and render the toolbar
+- `preview.html` / `preview.js` — In‑extension preview (Save/Start New/Close)
+
+---
+
+## 🛠️ Building from source
+
+No build step is required. Load the folder as an unpacked extension (see Quick start). To develop:
+
+1. Make your changes
+2. In `chrome://extensions`, click the “Reload” icon for BugReel
+3. Test on any site (the `navigation-test.html` and `debug-toolbar.html` in this repo can help)
+
+---
+
+## 🗺️ Roadmap ideas
+
+- Click‑to‑seek from console/network entries in the report
+- One‑click export: MP4 or ZIP (video + JSON)
+- Optional share/upload target (S3/GCS) with expiring links
+- Repro steps generator from captured actions
+- Simple in‑report trimming and annotations
+
+---
+
+## 🤝 Contributing
+
+Issues and PRs are welcome. Please keep PRs focused and include a brief description, test steps, and screenshots/GIFs where relevant.
+
+
+Made with care to help you file better bugs, faster.

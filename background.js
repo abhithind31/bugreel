@@ -1,5 +1,5 @@
-// background.js - Service Worker for BugReel extension
-console.log('SERVICE WORKER: 🚀 BugReel service worker loaded at', new Date().toISOString());
+// Service worker for BugReel
+console.log('ServiceWorker: loaded at', new Date().toISOString());
 
 // Session storage keys
 const STORAGE_KEYS = {
@@ -13,9 +13,8 @@ const STORAGE_KEYS = {
     VIDEO_ERROR: 'videoError' // Added for video recording errors
 };
 
-// Track service worker restarts
 let serviceWorkerStartTime = Date.now();
-console.log('SERVICE WORKER: 📊 Service worker start time:', new Date(serviceWorkerStartTime).toISOString());
+console.log('ServiceWorker: start time', new Date(serviceWorkerStartTime).toISOString());
 
 // Offscreen document management
 let offscreenDocumentPromise = null;
@@ -304,7 +303,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 // Content script re-injection function
 async function reinjectContentScript(tabId) {
-    console.log('SERVICE WORKER: Re-injecting content script for tab:', tabId);
+    console.log('ServiceWorker: re-inject content script for tab', tabId);
     
     try {
         // Remove any existing toolbar first
@@ -361,18 +360,18 @@ async function reinjectContentScript(tabId) {
 
 // Message handler for popup and content script communication
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-    console.log('SERVICE WORKER: Received message:', message.type, 'from', sender.tab ? 'tab' : 'popup');
+    // minimal logging only for service worker diagnostics
     
     try {
         switch (message.type) {
             case 'START_CAPTURE':
-                console.log('SERVICE WORKER: Handling START_CAPTURE');
+                console.log('ServiceWorker: START_CAPTURE');
                 await startCapture();
                 sendResponse({ success: true });
                 break;
                 
             case 'STOP_CAPTURE':
-                console.log('SERVICE WORKER: Handling STOP_CAPTURE');
+                console.log('ServiceWorker: STOP_CAPTURE');
                 await stopCapture();
                 sendResponse({ success: true });
                 break;
@@ -395,12 +394,12 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             break;
             
         case 'VIDEO_RECORDED':
-            console.log('SERVICE WORKER: 📹 VIDEO_RECORDED message received, payload:', message.payload);
+            console.log('ServiceWorker: VIDEO_RECORDED');
             await handleVideoRecorded(message.payload);
             break;
             
         case 'VIDEO_ERROR':
-            console.error('SERVICE WORKER: 🚨 VIDEO_ERROR message received:', message.payload);
+            console.error('ServiceWorker: VIDEO_ERROR', message.payload);
             await handleVideoError(message.payload);
             break;
             
@@ -463,10 +462,10 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             break;
             
         default:
-            console.warn('SERVICE WORKER: Unknown message type:', message.type);
+            console.warn('ServiceWorker: unknown message type', message.type);
         }
     } catch (error) {
-        console.error('SERVICE WORKER: Error handling message:', error);
+        console.error('ServiceWorker: message handler error', error);
         sendResponse({ success: false, error: error.message });
     }
     
@@ -615,6 +614,12 @@ async function stopCapture() {
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (activeTab) {
             try {
+                // Freeze the on-page timer immediately for better UX
+                try {
+                    await chrome.tabs.sendMessage(activeTab.id, { type: 'FREEZE_TIMER' });
+                } catch (e) {
+                    // Ignore if content script is not reachable
+                }
                 await chrome.tabs.sendMessage(activeTab.id, {
                     type: 'STOP_LOGGING'
                 });
@@ -1436,73 +1441,21 @@ function createHtmlReport(reportData) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BugReel Report - ${reportData.timestamp}</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        :root{ --bg:#0f1113; --card:#161a1d; --muted:#b9c1c6; --text:#ffffff; --radius:14px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); }
+        .container { max-width: 1200px; margin:0 auto; padding:16px; }
+        .header { background: transparent; color: var(--muted); margin-bottom: 8px; }
+        .header .meta { color: var(--muted); font-size:12px; }
         
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f5f5f5;
-            color: #333;
-        }
+        /* Notes (dark) */
+        .notes-section { margin-bottom: 12px; }
+        .notes-section h2 { margin: 0 0 8px 0; font-size: 1.1em; color: var(--text); opacity: .9; }
+        .notes-content { color: #e5e7eb; line-height: 1.6; background: #161a1d; padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.06); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
         
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
+        .main-content { display:grid; grid-template-columns: 3fr 2fr; gap: 20px; min-height: 600px; }
         
-        .header {
-            background: white;
-            padding: 12px 16px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-bottom: 12px;
-        }
-        
-        .header .meta {
-            color: #7f8c8d;
-            font-size: 14px;
-        }
-        
-        .notes-section {
-            background: #f8f9fa;
-            padding: 20px;
-            margin: 20px 0;
-            border-radius: 8px;
-            border-left: 4px solid #007bff;
-        }
-        
-        .notes-section h2 {
-            color: #2c3e50;
-            margin-bottom: 15px;
-            font-size: 1.2em;
-        }
-        
-        .notes-content {
-            color: #495057;
-            line-height: 1.6;
-            background: white;
-            padding: 15px;
-            border-radius: 4px;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-        
-        .main-content {
-            display: grid;
-            grid-template-columns: 1fr 400px;
-            gap: 20px;
-            min-height: 600px;
-        }
-        
-        .video-section {
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            padding: 20px;
-        }
+        .video-section { background: var(--card); border-radius: var(--radius); box-shadow: 0 12px 30px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.25); padding: 16px; border: 1px solid rgba(255,255,255,0.06); }
         
         .video-container {
             position: relative;
@@ -1518,40 +1471,13 @@ function createHtmlReport(reportData) {
             display: block;
         }
         
-        .video-controls {
-            margin-top: 15px;
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
+        .video-controls { margin-top: 12px; display:flex; gap:8px; align-items:center; color: var(--muted); }
         
-        .data-section {
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            padding: 20px;
-            overflow-y: auto;
-            max-height: 80vh;
-        }
+        .data-section { background: var(--card); border-radius: var(--radius); box-shadow: 0 12px 30px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.25); padding: 16px; border: 1px solid rgba(255,255,255,0.06); overflow-y:auto; max-height:80vh; }
         
-        .tabs {
-            display: flex;
-            border-bottom: 2px solid #ecf0f1;
-            margin-bottom: 20px;
-        }
-        
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            transition: all 0.3s ease;
-        }
-        
-        .tab.active {
-            border-bottom-color: #3498db;
-            color: #3498db;
-            font-weight: bold;
-        }
+        .tabs { display:flex; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 12px; }
+        .tab { padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; transition: all .12s ease; color: var(--muted); font-weight:600; font-size:13px; }
+        .tab.active { border-bottom-color: #0b84ff; color:#0b84ff; }
         
         .tab-content {
             display: none;
@@ -1570,44 +1496,14 @@ function createHtmlReport(reportData) {
             border: 1px solid #dee2e6;
         }
         
-        .search-container {
-            display: flex;
-            align-items: center;
-            margin-bottom: 15px;
-            position: relative;
-        }
+        .search-container { display:flex; align-items:center; margin-bottom:12px; position:relative; }
         
-        #search-input {
-            flex: 1;
-            padding: 8px 40px 8px 12px;
-            border: 1px solid #ced4da;
-            border-radius: 6px;
-            font-size: 14px;
-            background: white;
-        }
+        #search-input { flex:1; padding:8px 40px 8px 12px; border:1px solid rgba(255,255,255,.08); border-radius:8px; font-size:14px; background:#1b2024; color:#e5e7eb; }
         
-        #search-input:focus {
-            outline: none;
-            border-color: #3498db;
-            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
-        }
+        #search-input:focus { outline:none; border-color:#0b84ff; box-shadow: 0 0 0 2px rgba(11,132,255,.25); }
         
-        #clear-search {
-            position: absolute;
-            right: 8px;
-            background: none;
-            border: none;
-            color: #6c757d;
-            cursor: pointer;
-            padding: 4px;
-            border-radius: 3px;
-            font-size: 14px;
-        }
-        
-        #clear-search:hover {
-            background: #e9ecef;
-            color: #495057;
-        }
+        #clear-search { position:absolute; right:8px; background:none; border:none; color:#9aa3a9; cursor:pointer; padding:4px; border-radius:6px; font-size:14px; }
+        #clear-search:hover { background:rgba(255,255,255,.06); color:#e5e7eb; }
         
         .filter-container {
             display: grid;
@@ -1699,12 +1595,7 @@ function createHtmlReport(reportData) {
             margin-bottom: 5px;
         }
         
-        .network-request {
-            margin-bottom: 15px;
-            padding: 15px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-        }
+        .network-request { margin-bottom: 12px; padding: 12px; background:#1b2024; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; }
         
         .network-request.error {
             border-left: 4px solid #e74c3c;
@@ -1714,73 +1605,48 @@ function createHtmlReport(reportData) {
             border-left: 4px solid #27ae60;
         }
         
-        .request-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
+        .request-header { display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; }
         
-        .request-method {
-            font-weight: bold;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 12px;
-        }
+        .request-method { font-weight:700; padding: 2px 6px; border-radius: 6px; font-size: 12px; background: rgba(255,255,255,.06); color:#e5e7eb; }
         
         .method-get { background: #d4edda; color: #155724; }
         .method-post { background: #fff3cd; color: #856404; }
         .method-put { background: #cce5ff; color: #004085; }
         .method-delete { background: #f8d7da; color: #721c24; }
         
-        .status-code {
-            font-weight: bold;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 12px;
-        }
+        .status-code { font-weight:700; padding: 2px 6px; border-radius: 6px; font-size: 12px; background: rgba(255,255,255,.06); color:#e5e7eb; }
         
         .status-2xx { background: #d4edda; color: #155724; }
         .status-3xx { background: #cce5ff; color: #004085; }
         .status-4xx { background: #fff3cd; color: #856404; }
         .status-5xx { background: #f8d7da; color: #721c24; }
         
-        .collapsible {
-            cursor: pointer;
-            padding: 5px;
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 3px;
-            margin-top: 5px;
-        }
+        .collapsible { cursor:pointer; padding:6px 8px; background:#0f1113; border:1px solid rgba(255,255,255,.08); border-radius: 8px; margin-top:8px; color:#e5e7eb; }
+        .collapsible:hover { background:#13171a; }
         
-        .collapsible-content {
-            display: none;
-            padding: 10px;
-            background: #fff;
-            border: 1px solid #dee2e6;
-            border-top: none;
-            border-radius: 0 0 3px 3px;
-        }
+        .collapsible-content { display:none; padding:10px; background:#0f1113; border:1px solid rgba(255,255,255,.08); border-top:none; border-radius: 0 0 8px 8px; color:#b9c1c6; }
+        .request-url { color:#e5e7eb; word-break: break-all; margin: 6px 0; }
+        .request-timing { color:#b9c1c6; font-size: 12px; }
         
         .user-action {
             margin-bottom: 10px;
-            padding: 10px;
-            border-radius: 5px;
-            background: #f8f9fa;
-            border-left: 4px solid #6c757d;
+            padding: 12px;
+            border-radius: 10px;
+            background: #1b2024;
+            border: 1px solid rgba(255,255,255,0.06);
+            color: #e5e7eb;
         }
         
         .user-action.highlight {
-            background-color: #fff3cd;
-            border-left-color: #ffc107;
+            background-color: #2a2f34;
+            border-color: rgba(255,255,255,0.12);
         }
         
         .user-action.active-sync {
-            background-color: #e8f5e8;
-            border-left-color: #4caf50;
+            background-color: #233027;
+            border-color: #4caf50;
             transform: scale(1.02);
-            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.25);
             animation: pulseSync 1s ease-in-out;
         }
         
@@ -1802,23 +1668,11 @@ function createHtmlReport(reportData) {
             gap: 15px;
         }
         
-        .env-item {
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 5px;
-            border: 1px solid #dee2e6;
-        }
+        .env-item { padding: 12px; background: #1b2024; border-radius: 10px; border: 1px solid rgba(255,255,255,0.06); }
         
-        .env-label {
-            font-weight: bold;
-            color: #495057;
-            margin-bottom: 5px;
-        }
+        .env-label { font-weight: 700; color: #e5e7eb; margin-bottom: 6px; font-size: 12px; letter-spacing: .3px; text-transform: uppercase; opacity: .9; }
         
-        .env-value {
-            color: #6c757d;
-            font-size: 14px;
-        }
+        .env-value { color: #b9c1c6; font-size: 14px; }
         
         .no-data {
             text-align: center;
@@ -1827,85 +1681,7 @@ function createHtmlReport(reportData) {
             font-style: italic;
         }
         
-        /* Timeline Visualization Styles (Phase 3) */
-        .timeline-markers {
-            margin-top: 15px;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            border: 1px solid #dee2e6;
-        }
-        
-        .timeline-track {
-            position: relative;
-            height: 60px;
-        }
-        
-        .timeline-labels {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        
-        .timeline-label {
-            padding: 2px 8px;
-            border-radius: 12px;
-            color: white;
-            font-size: 10px;
-        }
-        
-        .timeline-label.errors {
-            background: #e74c3c;
-        }
-        
-        .timeline-label.network {
-            background: #f39c12;
-        }
-        
-        .timeline-label.actions {
-            background: #27ae60;
-        }
-        
-        .timeline-bars {
-            position: relative;
-            height: 40px;
-            background: #ecf0f1;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-        
-        .timeline-bar {
-            position: absolute;
-            width: 100%;
-            height: 12px;
-        }
-        
-        .error-bar {
-            top: 2px;
-        }
-        
-        .network-bar {
-            top: 16px;
-        }
-        
-        .action-bar {
-            top: 30px;
-        }
-        
-        .timeline-marker {
-            position: absolute;
-            width: 3px;
-            height: 100%;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        
-        .timeline-marker:hover {
-            width: 5px;
-            z-index: 10;
-        }
+        /* Timeline removed per design */
         
         .error-marker {
             background: #e74c3c;
@@ -2004,7 +1780,7 @@ function createHtmlReport(reportData) {
         
         <div class="main-content">
             <div class="video-section">
-                <h2>📹 Screen Recording</h2>
+                <h2 style="margin:0 0 8px 0; font-size:1.1em; opacity:.9">📹 Screen Recording</h2>
                 ${videoDataUrl ? `
                     <div class="video-container">
                         <video id="mainVideo" controls>
@@ -2013,9 +1789,9 @@ function createHtmlReport(reportData) {
                         </video>
                     </div>
                     <div class="video-controls">
-                        <span>Duration: <span id="videoDuration">--:--</span></span>
-                        <span>|</span>
                         <span>Size: ${(reportData.videoData.size / 1024 / 1024).toFixed(2)} MB</span>
+                        <span>·</span>
+                        <span>Format: ${reportData.videoData.mimeType}</span>
                     </div>
                 ` : `
                     <div class="no-data">
@@ -2034,15 +1810,15 @@ function createHtmlReport(reportData) {
                 </div>
                 
                 <!-- Enhanced Search and Filter Controls (Phase 3) -->
-                <div class="controls-section">
-                    <div class="search-container">
-                        <input type="text" id="search-input" placeholder="Search logs, requests, or actions..." />
+                <div class="controls-section" style="background:#1b2024; border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:12px;">
+                    <div class="search-container" style="margin-bottom:10px;">
+                        <input type="text" id="search-input" placeholder="Search logs, requests, or actions..." style="background:#0f1113; border:1px solid rgba(255,255,255,0.08); color:#e5e7eb;" />
                         <button id="clear-search" title="Clear search">✕</button>
                     </div>
                     <div class="filter-container">
                         <div class="filter-group">
                             <label>Log Level:</label>
-                            <select id="log-level-filter">
+                            <select id="log-level-filter" style="background:#0f1113; color:#e5e7eb; border:1px solid rgba(255,255,255,0.08)">
                                 <option value="">All Levels</option>
                                 <option value="error">Errors</option>
                                 <option value="warn">Warnings</option>
@@ -2053,7 +1829,7 @@ function createHtmlReport(reportData) {
                         </div>
                         <div class="filter-group">
                             <label>Status:</label>
-                            <select id="status-filter">
+                            <select id="status-filter" style="background:#0f1113; color:#e5e7eb; border:1px solid rgba(255,255,255,0.08)">
                                 <option value="">All Status</option>
                                 <option value="2xx">Success (2xx)</option>
                                 <option value="3xx">Redirect (3xx)</option>
@@ -2063,7 +1839,7 @@ function createHtmlReport(reportData) {
                         </div>
                         <div class="filter-group">
                             <label>Time Range:</label>
-                            <select id="time-filter">
+                            <select id="time-filter" style="background:#0f1113; color:#e5e7eb; border:1px solid rgba(255,255,255,0.08)">
                                 <option value="">All Time</option>
                                 <option value="first-10">First 10s</option>
                                 <option value="first-30">First 30s</option>
@@ -2221,17 +1997,7 @@ function createHtmlReport(reportData) {
             const reportTimestamp = new Date(reportData.timestamp);
             recordingStartTime = reportTimestamp.getTime();
             
-            video.addEventListener('loadedmetadata', () => {
-                const duration = Math.floor(video.duration);
-                const minutes = Math.floor(duration / 60);
-                const seconds = duration % 60;
-                document.getElementById('videoDuration').textContent = 
-                    minutes.toString().padStart(2, '0') + ':' + 
-                    seconds.toString().padStart(2, '0');
-                
-                // Initialize timeline markers
-                initializeTimelineMarkers();
-            });
+            // No duration display; timeline removed
             
             // Handle seeking detection
             video.addEventListener('seeking', () => {
@@ -2256,86 +2022,9 @@ function createHtmlReport(reportData) {
             });
         }
         
-        function initializeTimelineMarkers() {
-            // Add timeline visualization
-            const videoContainer = document.querySelector('.video-container');
-            if (videoContainer && video) {
-                const timeline = document.createElement('div');
-                timeline.className = 'timeline-markers';
-                timeline.innerHTML = '<div class="timeline-track">' +
-                    '<div class="timeline-labels">' +
-                        '<span class="timeline-label errors">Errors</span>' +
-                        '<span class="timeline-label network">Network</span>' +
-                        '<span class="timeline-label actions">Actions</span>' +
-                    '</div>' +
-                    '<div class="timeline-bars">' +
-                        '<div class="timeline-bar error-bar" id="error-timeline"></div>' +
-                        '<div class="timeline-bar network-bar" id="network-timeline"></div>' +
-                        '<div class="timeline-bar action-bar" id="action-timeline"></div>' +
-                    '</div>' +
-                '</div>';
-                videoContainer.appendChild(timeline);
-                
-                // Populate timeline markers
-                populateTimelineMarkers();
-            }
-        }
+        // Timeline removed
         
-        function populateTimelineMarkers() {
-            if (!video || !recordingStartTime) return;
-            
-            const videoDuration = video.duration;
-            const errorBar = document.getElementById('error-timeline');
-            const networkBar = document.getElementById('network-timeline');
-            const actionBar = document.getElementById('action-timeline');
-            
-            if (!errorBar || !networkBar || !actionBar) return;
-            
-            // Clear existing markers
-            [errorBar, networkBar, actionBar].forEach(bar => bar.innerHTML = '');
-            
-            // Add error markers
-            reportData.consoleLogs.filter(log => log.level === 'error').forEach(log => {
-                const logTime = new Date(log.timestamp).getTime();
-                const relativeTime = (logTime - recordingStartTime) / 1000;
-                if (relativeTime >= 0 && relativeTime <= videoDuration) {
-                    const position = (relativeTime / videoDuration) * 100;
-                    const marker = document.createElement('div');
-                    marker.className = 'timeline-marker error-marker';
-                    marker.style.left = position + '%';
-                    marker.title = 'Error at ' + formatTime(relativeTime) + ': ' + log.message.substring(0, 50) + '...';
-                    errorBar.appendChild(marker);
-                }
-            });
-            
-            // Add network error markers
-            reportData.networkLogs.filter(req => req.statusCode >= 400).forEach(req => {
-                const reqTime = new Date(req.timestamp).getTime();
-                const relativeTime = (reqTime - recordingStartTime) / 1000;
-                if (relativeTime >= 0 && relativeTime <= videoDuration) {
-                    const position = (relativeTime / videoDuration) * 100;
-                    const marker = document.createElement('div');
-                    marker.className = 'timeline-marker network-marker';
-                    marker.style.left = position + '%';
-                    marker.title = req.method + ' ' + req.url + ' - ' + req.statusCode + ' at ' + formatTime(relativeTime);
-                    networkBar.appendChild(marker);
-                }
-            });
-            
-            // Add user action markers
-            reportData.userActions.forEach(action => {
-                const actionTime = new Date(action.timestamp).getTime();
-                const relativeTime = (actionTime - recordingStartTime) / 1000;
-                if (relativeTime >= 0 && relativeTime <= videoDuration) {
-                    const position = (relativeTime / videoDuration) * 100;
-                    const marker = document.createElement('div');
-                    marker.className = 'timeline-marker action-marker';
-                    marker.style.left = position + '%';
-                    marker.title = action.type + ' on ' + action.selector + ' at ' + formatTime(relativeTime);
-                    actionBar.appendChild(marker);
-                }
-            });
-        }
+        // Timeline removed
         
         function synchronizeContent(currentTimestamp, videoTime) {
             // Remove previous highlights
@@ -2377,32 +2066,9 @@ function createHtmlReport(reportData) {
                 }
             }
             
-            // Update timeline position indicator
-            updateTimelinePosition(videoTime);
+            // Timeline removed
         }
-        
-        function updateTimelinePosition(videoTime) {
-            const videoDuration = video ? video.duration : 0;
-            if (videoDuration > 0) {
-                const position = (videoTime / videoDuration) * 100;
-                
-                // Update or create position indicator
-                let indicator = document.getElementById('timeline-position');
-                if (!indicator) {
-                    indicator = document.createElement('div');
-                    indicator.id = 'timeline-position';
-                    indicator.className = 'timeline-position-indicator';
-                    const timelineTrack = document.querySelector('.timeline-track');
-                    if (timelineTrack) {
-                        timelineTrack.appendChild(indicator);
-                    }
-                }
-                
-                if (indicator) {
-                    indicator.style.left = position + '%';
-                }
-            }
-        }
+        // Timeline removed
         
         function scrollToElement(element) {
             if (element && element.scrollIntoView) {
@@ -2762,8 +2428,8 @@ function createPreviewHtml(previewData) {
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f8f9fa;
-            color: #212529;
+            background: #0f1113;
+            color: #e5e7eb;
             line-height: 1.6;
         }
         
@@ -2845,68 +2511,74 @@ function createPreviewHtml(previewData) {
         
         .preview-content {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-bottom: 30px;
+            grid-template-columns: 3fr 2fr;
+            gap: 20px;
+            margin-bottom: 20px;
         }
         
         .video-section {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            background: #161a1d;
+            padding: 16px;
+            border-radius: 14px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.25);
+            border: 1px solid rgba(255,255,255,0.06);
         }
         
         .video-section h2 {
-            margin-bottom: 20px;
-            color: #2c3e50;
-            font-size: 1.5em;
+            margin: 0 0 12px 0;
+            color: #ffffff;
+            font-size: 1.1em;
+            opacity: .9;
         }
         
         .video-container {
             position: relative;
             width: 100%;
-            max-width: 500px;
-            margin: 0 auto;
+            margin: 0;
         }
         
         .video-player {
             width: 100%;
             height: auto;
-            border-radius: 8px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            background: #000;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.25);
         }
         
         .video-info {
-            margin-top: 15px;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            font-size: 14px;
+            margin-top: 12px;
+            padding: 12px;
+            background: #1b2024;
+            border-radius: 10px;
+            font-size: 13px;
+            color: #b9c1c6;
+            border: 1px solid rgba(255,255,255,0.06);
         }
         
         .data-summary {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            background: #161a1d;
+            padding: 16px;
+            border-radius: 14px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.25);
+            border: 1px solid rgba(255,255,255,0.06);
         }
         
         .data-summary h2 {
-            margin-bottom: 20px;
-            color: #2c3e50;
-            font-size: 1.5em;
+            margin: 0 0 12px 0;
+            color: #ffffff;
+            font-size: 1.1em;
+            opacity: .9;
         }
         
         .summary-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 15px;
-            margin-bottom: 10px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            border-left: 4px solid #007bff;
+            padding: 12px;
+            margin-bottom: 8px;
+            background: #1b2024;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
         }
         
         .summary-item:last-child {
@@ -2927,22 +2599,16 @@ function createPreviewHtml(previewData) {
         
         .summary-label {
             font-weight: 600;
-            color: #2c3e50;
+            color: #e5e7eb;
         }
         
         .summary-count {
-            font-size: 1.2em;
-            font-weight: bold;
-            color: #6c757d;
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #b9c1c6;
         }
         
-        .notes-section {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
-        }
+        /* notes-section removed */
         
         .notes-section h2 {
             margin-bottom: 20px;
@@ -3071,13 +2737,7 @@ function createPreviewHtml(previewData) {
 </head>
 <body>
     <div class="preview-container">
-        <div class="preview-header">
-            <h1>🎬 BugReel Preview</h1>
-            <p>Review your recording before saving the final report</p>
-            <p style="font-size: 0.9em; color: #6c757d;">
-                Captured on ${new Date(previewData.timestamp).toLocaleString()}
-            </p>
-        </div>
+        <!-- Minimal header removed per new design -->
         
         <!-- Action buttons removed; outer extension page provides controls -->
         
@@ -3091,7 +2751,7 @@ function createPreviewHtml(previewData) {
                             Your browser does not support the video tag.
                         </video>
                         <div class="video-info">
-                            <strong>Duration:</strong> ${previewData.videoData.duration ? (previewData.videoData.duration / 1000).toFixed(1) + 's' : 'Unknown'}<br>
+                            <strong>Duration:</strong> <span id="brDuration">${typeof previewData.videoData.duration === 'number' && isFinite(previewData.videoData.duration) && previewData.videoData.duration > 0 ? (previewData.videoData.duration / 1000).toFixed(1) + 's' : 'Unknown'}</span><br>
                             <strong>Size:</strong> ${previewData.videoData.size ? (previewData.videoData.size / 1024 / 1024).toFixed(1) + ' MB' : 'Unknown'}<br>
                             <strong>Format:</strong> ${previewData.videoData.mimeType || 'Unknown'}
                         </div>
@@ -3148,18 +2808,29 @@ function createPreviewHtml(previewData) {
             </div>
         </div>
         
-        <div class="notes-section">
-            <h2>📝 Add Notes (Optional)</h2>
-            <textarea 
-                class="notes-textarea" 
-                id="reportNotes" 
-                placeholder="Add any additional notes, bug description, or context that will be included in the final report..."
-            ></textarea>
-        </div>
+        <!-- Notes section removed per new design -->
     </div>
     
     <script>
-        // No inline actions; handled by outer extension page
+        // Update duration from actual video metadata if missing or 'Unknown'
+        (function(){
+            try {
+                const video = document.querySelector('.video-player');
+                const durSpan = document.getElementById('brDuration');
+                if (video && durSpan) {
+                    const setDur = () => {
+                        if (isFinite(video.duration) && video.duration > 0) {
+                            durSpan.textContent = (video.duration).toFixed(1) + 's';
+                        }
+                    };
+                    video.addEventListener('loadedmetadata', setDur, { once: true });
+                    // In case metadata is already loaded
+                    if (!isNaN(video.duration) && isFinite(video.duration) && video.duration > 0) {
+                        setDur();
+                    }
+                }
+            } catch (e) {}
+        })();
     </script>
 </body>
 </html>`;

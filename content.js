@@ -1,9 +1,7 @@
-// BugReel Content Script
 (function() {
     'use strict';
     
-    console.log('CONTENT: 🚀 BugReel content script loaded on:', window.location.href);
-    console.log('CONTENT: Content script timestamp:', new Date().toISOString());
+    console.log('BugReel: content script loaded on', window.location.href);
     
     // State variables
     let isLogging = false;
@@ -16,7 +14,7 @@
         originalConsole[level] = console[level];
     });
     
-    // Safe JSON stringify function to handle circular references
+    // JSON stringify helper resilient to circular references and exotic values
     function safeJsonStringify(obj, maxDepth = 10) {
         const seen = new WeakSet();
         
@@ -28,12 +26,12 @@
                 seen.add(value);
             }
             
-            // Handle DOM elements
+            // DOM elements
             if (value instanceof Element) {
                 return `<${value.tagName.toLowerCase()}${value.id ? ' id="' + value.id + '"' : ''}${value.className ? ' class="' + value.className + '"' : ''}/>`;
             }
             
-            // Handle other special objects
+            // Errors
             if (value instanceof Error) {
                 return {
                     name: value.name,
@@ -42,17 +40,17 @@
                 };
             }
             
-            // Handle functions
+            // Functions
             if (typeof value === 'function') {
                 return '[Function: ' + (value.name || 'anonymous') + ']';
             }
             
-            // Handle undefined
+            // Undefined
             if (value === undefined) {
                 return '[undefined]';
             }
             
-            // Handle symbols
+            // Symbols
             if (typeof value === 'symbol') {
                 return '[Symbol: ' + value.toString() + ']';
             }
@@ -63,348 +61,150 @@
         try {
             return JSON.stringify(obj, replacer, 2);
         } catch (error) {
-            console.warn('CONTENT: Unable to serialize object:', error);
+            console.warn('BugReel: unable to serialize object', error);
             return '[Unable to serialize: ' + error.message + ']';
         }
     }
     
     function createRecordingToolbar(recordingMode = 'video') {
-        console.log('CONTENT: 🎨 createRecordingToolbar called with mode:', recordingMode);
+        console.log('BugReel: creating toolbar, mode:', recordingMode);
         
         // Remove any existing toolbar first
-        console.log('CONTENT: 🗑️ Removing any existing toolbar...');
+        console.log('BugReel: removing existing toolbar');
         try {
             removeRecordingToolbar();
-            console.log('CONTENT: ✅ Existing toolbar removed');
+            console.log('BugReel: previous toolbar removed');
         } catch (error) {
-            console.error('CONTENT: ❌ Error removing existing toolbar:', error);
+            console.error('BugReel: remove toolbar error:', error);
         }
         
-        console.log('CONTENT: 🔧 Creating toolbar HTML element...');
+        console.log('BugReel: creating toolbar element');
         
         // Create the toolbar HTML
         const toolbar = document.createElement('div');
         toolbar.id = 'bugreel-toolbar';
-        console.log('CONTENT: ✅ Toolbar div created with ID:', toolbar.id);
+        console.log('BugReel: toolbar element created:', toolbar.id);
         
-        console.log('CONTENT: 📝 Setting toolbar innerHTML...');
+        console.log('BugReel: setting toolbar markup');
         toolbar.innerHTML = `
-            <div style="all: initial; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 2147483647; font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; user-select: none; pointer-events: auto;">
-                <div style="background: #263238; border-radius: 8px; padding: 12px 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.12); display: flex; align-items: center; gap: 16px; min-height: 48px; animation: bugreel-slide-in 0.3s ease-out;">
-                    <div class="bugreel-toolbar-left">
-                        <div class="bugreel-logo">
-                            <div class="bugreel-logo-icon">fiber_manual_record</div>
-                            <div class="bugreel-logo-text">BugReel</div>
-                        </div>
-                        <div class="bugreel-status">
-                            <div class="bugreel-recording-dot"></div>
-                            <span class="bugreel-timer">00:00</span>
-                        </div>
-                    </div>
-                    <div class="bugreel-toolbar-center">
-                        <div class="bugreel-mode-info">
-                            <div class="bugreel-icon">videocam</div>
-                            <div class="bugreel-label">Recording</div>
-                        </div>
-                    </div>
-                    <div class="bugreel-toolbar-right">
-                        <button class="bugreel-btn" id="bugreel-audio-btn" title="Toggle System Audio">
-                            <div class="bugreel-icon">volume_up</div>
-                        </button>
-                        <button class="bugreel-btn" id="bugreel-mic-btn" title="Toggle Microphone">
-                            <div class="bugreel-icon">mic</div>
-                        </button>
-                        <button class="bugreel-btn" id="bugreel-pause-btn" title="Pause/Resume Recording">
-                            <div class="bugreel-icon">pause</div>
-                        </button>
-                        <button class="bugreel-btn bugreel-stop-btn" id="bugreel-stop-btn" title="Stop Recording">
-                            <div class="bugreel-icon">stop</div>
-                        </button>
-                        <button class="bugreel-btn bugreel-minimize-btn" id="bugreel-minimize-btn" title="Minimize">
-                            <div class="bugreel-icon">remove</div>
-                        </button>
-                    </div>
+            <div style="all: initial; position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif; user-select: none; pointer-events: auto;">
+                <div class="br-bar" style="animation: bugreel-slide-in 0.25s ease-out both;">
+                    <button class="br-btn br-stop" id="bugreel-stop-btn" title="Stop Recording" aria-label="Stop Recording"></button>
+                    <button class="br-btn" id="bugreel-pause-btn" title="Pause/Resume Recording" aria-label="Pause or resume">⏸</button>
+                    <span class="bugreel-timer" aria-live="polite">00:00</span>
+                    <div class="br-divider" role="separator"></div>
+                    <button class="br-btn" id="bugreel-mic-btn" title="Toggle Microphone" aria-pressed="true"></button>
+                    <button class="br-btn" id="bugreel-audio-btn" title="Toggle System Audio" aria-pressed="true"></button>
                 </div>
             </div>
         `;
         
-        console.log('CONTENT: ✅ Toolbar innerHTML set, length:', toolbar.innerHTML.length);
+        console.log('BugReel: toolbar markup set');
         
         // Add styles
-        console.log('CONTENT: 🎨 Adding styles...');
+        console.log('BugReel: injecting styles');
         const styles = `
             <style>
-            @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-            @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
-            
             @keyframes bugreel-slide-in {
-                from {
-                    transform: translateX(-50%) translateY(100%);
-                    opacity: 0;
-                }
-                to {
-                    transform: translateX(-50%) translateY(0);
-                    opacity: 1;
-                }
+                from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+                to { opacity: 1; transform: translateX(-50%) translateY(0); }
             }
-            
-            @keyframes bugreel-pulse {
-                0%, 100% { 
-                    opacity: 1;
-                    transform: scale(1);
-                }
-                50% { 
-                    opacity: 0.7;
-                    transform: scale(1.1);
-                }
-            }
-            
-            .bugreel-toolbar-left {
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-                min-width: 120px;
-            }
-            
-            .bugreel-logo {
-                display: flex;
+            .br-bar {
+                display: inline-flex;
                 align-items: center;
-                gap: 8px;
-                font-weight: 500;
-                font-size: 14px;
-                color: #ffffff;
+                gap: 10px;
+                padding: 6px 10px;
+                background: rgba(17, 17, 17, 0.92);
+                border-radius: 14px;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.25), 0 2px 8px rgba(0,0,0,0.2);
+                backdrop-filter: saturate(140%) blur(6px);
+                -webkit-backdrop-filter: saturate(140%) blur(6px);
+                cursor: grab;
             }
-            
-            .bugreel-logo-icon {
-                font-family: 'Material Icons';
-                color: #f44336;
-                font-size: 18px;
-                animation: bugreel-pulse 2s ease-in-out infinite;
-            }
-            
-            .bugreel-logo-text {
-                font-weight: 500;
-                color: #ffffff;
-            }
-            
-            .bugreel-status {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                font-size: 12px;
-                color: #b0bec5;
-                margin-top: 2px;
-            }
-            
-            .bugreel-recording-dot {
-                width: 8px;
-                height: 8px;
-                background: #f44336;
-                border-radius: 50%;
-                animation: bugreel-pulse 1.5s ease-in-out infinite;
-            }
-            
-            .bugreel-timer {
-                font-family: 'Roboto', monospace;
-                color: #ffffff;
-                font-weight: 500;
-                background: rgba(255, 255, 255, 0.1);
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-size: 11px;
-            }
-            
-            .bugreel-toolbar-center {
-                display: flex;
-                align-items: center;
-                gap: 16px;
-                flex: 1;
-                justify-content: center;
-            }
-            
-            .bugreel-toolbar-right {
-                display: flex;
-                gap: 8px;
-            }
-            
-            .bugreel-btn {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                background: rgba(255, 255, 255, 0.1);
+            .br-bar.dragging { cursor: grabbing; }
+            .br-btn {
+                width: 36px;
+                height: 36px;
+                border-radius: 8px;
                 border: none;
-                border-radius: 50%;
-                padding: 0;
-                color: #ffffff;
-                cursor: pointer;
-                transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-                width: 40px;
-                height: 40px;
-                position: relative;
-                overflow: hidden;
-            }
-            
-            .bugreel-btn::before {
-                content: '';
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                width: 0;
-                height: 0;
-                background: rgba(255, 255, 255, 0.2);
-                border-radius: 50%;
-                transition: all 0.3s ease;
-                transform: translate(-50%, -50%);
-            }
-            
-            .bugreel-btn:hover::before {
-                width: 100%;
-                height: 100%;
-            }
-          
-            .bugreel-btn:hover {
-                background: rgba(255, 255, 255, 0.2);
-                transform: scale(1.05);
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-            }
-            
-            .bugreel-btn.active {
-                background: #2196f3;
-                color: #ffffff;
-            }
-            
-            .bugreel-btn.disabled {
-                background: rgba(244, 67, 54, 0.8);
-                color: #ffffff;
-            }
-            
-            .bugreel-btn.disabled:hover {
-                transform: none;
-            }
-            
-            .bugreel-icon {
-                font-family: 'Material Icons';
-                font-size: 20px;
-                line-height: 1;
-                z-index: 1;
-                position: relative;
-            }
-            
-            .bugreel-label {
-                font-size: 10px;
-                font-weight: 500;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-                color: #b0bec5;
-                margin-top: 2px;
-            }
-            
-            .bugreel-stop-btn {
-                background: #f44336;
-                color: #ffffff;
-            }
-            
-            .bugreel-stop-btn:hover {
-                background: #d32f2f;
-                box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
-            }
-            
-            .bugreel-minimize-btn {
-                width: 32px;
-                height: 32px;
-            }
-            
-            .bugreel-minimize-btn .bugreel-icon {
-                font-size: 16px;
-            }
-            
-            .bugreel-mode-info {
-                display: flex;
+                background: rgba(255,255,255,0.08);
+                color: #fff;
+                display: inline-flex;
                 align-items: center;
-                gap: 8px;
-                padding: 8px 16px;
-                background: rgba(33, 150, 243, 0.1);
-                border: 1px solid rgba(33, 150, 243, 0.3);
-                border-radius: 20px;
-                color: #2196f3;
+                justify-content: center;
+                cursor: pointer;
+                transition: transform 0.12s ease, background 0.12s ease, opacity 0.12s ease;
+                font-size: 16px;
+                line-height: 1;
             }
-            
-            .bugreel-mode-info .bugreel-icon {
-                color: #2196f3;
-                font-size: 18px;
-            }
-            
-            .bugreel-mode-info .bugreel-label {
-                color: #2196f3;
-                font-weight: 500;
-                font-size: 12px;
-                text-transform: none;
-                letter-spacing: 0;
-                margin: 0;
-            }
+            .br-btn svg { width: 17px; height: 17px; display: block; stroke-linecap: round; stroke-linejoin: round; }
+            .br-btn:hover { background: rgba(255,255,255,0.16); transform: translateY(-1px); }
+            .br-btn:active { transform: translateY(0); }
+            .br-btn[aria-pressed="false"] { opacity: 0.7; }
+            .br-stop { background: #e53935; width: 14px; height: 14px; border-radius: 4px; box-shadow: 0 0 0 8px #e53935 inset; }
+            .br-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.14); border-radius: 1px; }
+            .bugreel-timer { color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 13px; padding: 2px 8px; background: rgba(255,255,255,0.08); border-radius: 7px; }
             </style>
         `;
 
         // Insert styles into the head
-        console.log('CONTENT: 📎 Inserting styles into head...');
+        console.log('BugReel: inserting styles into head');
         try {
             const styleElement = document.createElement('div');
             styleElement.innerHTML = styles;
             document.head.appendChild(styleElement.firstElementChild);
-            console.log('CONTENT: ✅ Styles inserted successfully');
+            console.log('BugReel: styles inserted');
         } catch (error) {
-            console.error('CONTENT: ❌ Error inserting styles:', error);
+            console.error('BugReel: style injection error:', error);
         }
 
         // Add toolbar to the page
-        console.log('CONTENT: 🏗️ Adding toolbar to document body...');
+        console.log('BugReel: adding toolbar to document');
         try {
-            console.log('CONTENT: Document body exists:', !!document.body);
-            console.log('CONTENT: Document ready state:', document.readyState);
-            
             if (!document.body) {
-                console.error('CONTENT: ❌ Document body is null! Cannot add toolbar.');
+                console.error('BugReel: document.body missing; cannot add toolbar');
                 return;
             }
             
             document.body.appendChild(toolbar);
-            console.log('CONTENT: ✅ Toolbar added to document body');
+            console.log('BugReel: toolbar added to document');
             
-            // Verify toolbar was added
             const addedToolbar = document.getElementById('bugreel-toolbar');
             if (addedToolbar) {
-                console.log('CONTENT: ✅ Toolbar verified in DOM after adding');
-                console.log('CONTENT: Toolbar parent:', addedToolbar.parentNode);
-                console.log('CONTENT: Toolbar dimensions:', addedToolbar.offsetWidth, 'x', addedToolbar.offsetHeight);
-                console.log('CONTENT: Toolbar style display:', getComputedStyle(addedToolbar).display);
-                console.log('CONTENT: Toolbar style visibility:', getComputedStyle(addedToolbar).visibility);
+                console.log('BugReel: toolbar verified in DOM');
             } else {
-                console.error('CONTENT: ❌ Toolbar NOT found in DOM after adding');
+                console.error('BugReel: toolbar not found after add');
             }
             
         } catch (error) {
-            console.error('CONTENT: ❌ Error adding toolbar to body:', error);
+            console.error('BugReel: error adding toolbar to body', error);
         }
 
         // Set up event listeners
-        console.log('CONTENT: 🔧 Setting up toolbar event listeners...');
+        console.log('BugReel: wiring toolbar events');
         try {
             setupToolbarEventListeners();
-            console.log('CONTENT: ✅ Toolbar event listeners set up successfully');
+            console.log('BugReel: toolbar events wired');
         } catch (error) {
-            console.error('CONTENT: ❌ Error setting up toolbar event listeners:', error);
+            console.error('BugReel: error wiring toolbar events', error);
         }
 
+        // Enable drag-to-move
+        try { setupToolbarDrag(); } catch (error) { console.error('BugReel: drag init error', error); }
+
+        // Initialize icon graphics
+        try { refreshAudioIcons(); } catch (error) { console.error('BugReel: icon init error', error); }
+
         // Start the recording timer
-        console.log('CONTENT: ⏰ Starting recording timer...');
+        console.log('BugReel: starting on-screen timer');
         try {
             startRecordingTimer();
-            console.log('CONTENT: ✅ Recording timer started successfully');
+            console.log('BugReel: timer started');
         } catch (error) {
-            console.error('CONTENT: ❌ Error starting recording timer:', error);
+            console.error('BugReel: timer start error', error);
         }
         
-        console.log('CONTENT: 🎉 Recording toolbar creation completed successfully');
+        console.log('BugReel: toolbar ready');
     }
     
     function setupToolbarEventListeners() {
@@ -418,43 +218,37 @@
         if (audioToggle) {
             audioToggle.addEventListener('click', () => {
                 isAudioEnabled = !isAudioEnabled;
-                audioToggle.classList.toggle('disabled', !isAudioEnabled);
-                audioToggle.querySelector('.bugreel-icon').textContent = isAudioEnabled ? '🔊' : '🔇';
-                
-                // Send message to service worker to toggle audio
-                chrome.runtime.sendMessage({
-                    type: 'TOGGLE_AUDIO',
-                    enabled: isAudioEnabled
-                });
+                audioToggle.setAttribute('aria-pressed', String(isAudioEnabled));
+                refreshAudioIcons();
+                chrome.runtime.sendMessage({ type: 'TOGGLE_AUDIO_RECORDING', enabled: isAudioEnabled });
             });
         }
         
         if (micToggle) {
             micToggle.addEventListener('click', () => {
                 isMicrophoneEnabled = !isMicrophoneEnabled;
-                micToggle.classList.toggle('disabled', !isMicrophoneEnabled);
-                micToggle.querySelector('.bugreel-icon').textContent = isMicrophoneEnabled ? '🎤' : '🎤';
-                
-                // Send message to service worker to toggle microphone
-                chrome.runtime.sendMessage({
-                    type: 'TOGGLE_MICROPHONE',
-                    enabled: isMicrophoneEnabled
-                });
+                micToggle.setAttribute('aria-pressed', String(isMicrophoneEnabled));
+                refreshAudioIcons();
+                chrome.runtime.sendMessage({ type: 'TOGGLE_MICROPHONE_RECORDING', enabled: isMicrophoneEnabled });
             });
         }
         
         if (pauseToggle) {
             pauseToggle.addEventListener('click', () => {
-                const isPaused = pauseToggle.classList.contains('active');
-                pauseToggle.classList.toggle('active');
-                pauseToggle.querySelector('.bugreel-icon').textContent = isPaused ? '⏸️' : '▶️';
-                pauseToggle.querySelector('.bugreel-label').textContent = isPaused ? 'Pause' : 'Resume';
-                
-                // Send message to service worker to pause/resume recording
-                chrome.runtime.sendMessage({
-                    type: 'TOGGLE_PAUSE',
-                    paused: !isPaused
-                });
+                const isPaused = pauseToggle.getAttribute('data-paused') === 'true';
+                const nextPaused = !isPaused;
+                pauseToggle.setAttribute('data-paused', String(nextPaused));
+                pauseToggle.textContent = nextPaused ? '▶' : '⏸';
+
+                if (nextPaused) {
+                    const now = Date.now();
+                    pausedElapsedSeconds = startTime ? Math.max(0, Math.floor((now - startTime) / 1000)) : 0;
+                    freezeTimer();
+                } else {
+                    startRecordingTimer(pausedElapsedSeconds);
+                }
+
+                chrome.runtime.sendMessage({ type: 'TOGGLE_PAUSE_RECORDING', paused: nextPaused });
             });
         }
         
@@ -464,16 +258,81 @@
             });
         }
         
-        if (minimizeBtn) {
-            minimizeBtn.addEventListener('click', () => {
-                const toolbar = document.getElementById('bugreel-toolbar');
-                if (toolbar) {
-                    toolbar.classList.toggle('minimized');
-                    const isMinimized = toolbar.classList.contains('minimized');
-                    minimizeBtn.querySelector('.bugreel-icon').textContent = isMinimized ? '+' : '−';
-                }
-            });
-        }
+        // Note: minimalist UI no longer has a minimize button
+    }
+
+    function iconMic(on = true) {
+        return on
+            ? '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 20v3" stroke="currentColor" stroke-width="2"/></svg>'
+            : '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" fill="currentColor" opacity=".5"/><path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="2" fill="none" opacity=".5"/><path d="M4 20 20 4" stroke="currentColor" stroke-width="2"/></svg>';
+    }
+
+    function iconSpeaker(on = true) {
+        return on
+            ? '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 9v6h4l5 4V5L7 9H3Z" fill="currentColor"/><path d="M16.5 12a4.5 4.5 0 0 0-2.3-3.9v7.8a4.5 4.5 0 0 0 2.3-3.9Z" fill="currentColor"/><path d="M19 12a7 7 0 0 0-3.5-6.1v2.2A4.9 4.9 0 0 1 17 12c0 1.9-1.1 3.6-2.5 4.9v2.2A7 7 0 0 0 19 12Z" fill="currentColor"/></svg>'
+            : '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 9v6h4l5 4V5L7 9H3Z" fill="currentColor" opacity=".5"/><path d="M19 12a7 7 0 0 0-3.5-6.1v2.2A4.9 4.9 0 0 1 17 12c0 1.9-1.1 3.6-2.5 4.9v2.2A7 7 0 0 0 19 12Z" fill="currentColor" opacity=".4"/><path d="M4 20 20 4" stroke="currentColor" stroke-width="2"/></svg>';
+    }
+
+    function refreshAudioIcons() {
+        const audioBtn = document.getElementById('bugreel-audio-btn');
+        const micBtn = document.getElementById('bugreel-mic-btn');
+        if (audioBtn) audioBtn.innerHTML = iconSpeaker(isAudioEnabled);
+        if (micBtn) micBtn.innerHTML = iconMic(isMicrophoneEnabled);
+    }
+
+    function setupToolbarDrag() {
+        const container = document.querySelector('#bugreel-toolbar > div');
+        const bar = container ? container.querySelector('.br-bar') : null;
+        if (!container || !bar) return;
+
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let originLeft = 0;
+        let originTop = 0;
+
+        const onPointerDown = (e) => {
+            // Only start drag when pressing on empty bar area, not on buttons
+            if (e.target.closest('.br-btn')) return;
+            isDragging = true;
+            bar.classList.add('dragging');
+            startX = e.clientX;
+            startY = e.clientY;
+            const rect = container.getBoundingClientRect();
+            originLeft = rect.left;
+            originTop = rect.top;
+            container.style.left = originLeft + 'px';
+            container.style.top = originTop + 'px';
+            container.style.right = 'auto';
+            container.style.bottom = 'auto';
+            container.style.transform = 'none';
+            container.style.position = 'fixed';
+            window.addEventListener('pointermove', onPointerMove, { passive: true });
+            window.addEventListener('pointerup', onPointerUp, { once: true });
+        };
+
+        const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+        const onPointerMove = (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            const barRect = container.getBoundingClientRect();
+            const newLeft = clamp(originLeft + dx, 8, vw - barRect.width - 8);
+            const newTop = clamp(originTop + dy, 8, vh - barRect.height - 8);
+            container.style.left = newLeft + 'px';
+            container.style.top = newTop + 'px';
+        };
+
+        const onPointerUp = () => {
+            isDragging = false;
+            bar.classList.remove('dragging');
+            window.removeEventListener('pointermove', onPointerMove, { passive: true });
+        };
+
+        bar.addEventListener('pointerdown', onPointerDown);
     }
     
     function stopRecording() {
@@ -501,9 +360,11 @@
     }
     
     let startTime = null;
+    let pausedElapsedSeconds = 0;
     
-    function startRecordingTimer() {
-        startTime = Date.now();
+    function startRecordingTimer(initialElapsedSeconds = 0) {
+        pausedElapsedSeconds = initialElapsedSeconds || 0;
+        startTime = Date.now() - (pausedElapsedSeconds * 1000);
         window.bugReelTimer = setInterval(updateTimer, 1000);
     }
     
@@ -521,11 +382,23 @@
                 seconds.toString().padStart(2, '0');
         }
     }
+
+    function freezeTimer() {
+        if (window.bugReelTimer) {
+            clearInterval(window.bugReelTimer);
+            window.bugReelTimer = null;
+        }
+    }
     
     // Override console methods
     function overrideConsole() {
         ['log', 'warn', 'error', 'info', 'debug'].forEach(level => {
             console[level] = function(...args) {
+                // Suppress tool-internal logs from page console and from report capture
+                const isInternal = args.some(a => typeof a === 'string' && /(BugReel|CONTENT|OFFSCREEN|SERVICE WORKER|ServiceWorker|Offscreen)/i.test(a));
+                if (isInternal) {
+                    return; // do not forward or print
+                }
                 // Send to service worker if logging is active
                 if (isLogging) {
                     try {
@@ -847,6 +720,12 @@
                     // Remove existing toolbar to prevent duplicates
                     console.log('CONTENT: 🗑️ Removing toolbar');
                     removeRecordingToolbar();
+                    sendResponse({ success: true });
+                    break;
+                
+                case 'FREEZE_TIMER':
+                    console.log('CONTENT: ⏸️ Freezing timer display');
+                    freezeTimer();
                     sendResponse({ success: true });
                     break;
                     

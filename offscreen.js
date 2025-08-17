@@ -1,5 +1,5 @@
 // offscreen.js - Screen recording in offscreen document
-console.log('OFFSCREEN: BugReel offscreen document loaded');
+console.log('Offscreen: loaded');
 
 let mediaRecorder = null;
 let recordedChunks = [];
@@ -14,59 +14,59 @@ let isPaused = false;
 const statusElement = document.getElementById('status');
 
 function updateStatus(message) {
-    console.log('OFFSCREEN:', message);
+    // keep debug logs local only; no page console forwarding
     statusElement.textContent = message;
 }
 
 // Listen for messages from service worker
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-    console.log('OFFSCREEN: Received message:', message.type, 'from:', sender);
+    console.log('Offscreen: message', message.type, 'from:', sender);
     
     try {
         switch (message.type) {
             case 'START_RECORDING':
-                console.log('OFFSCREEN: Starting recording with options:', message.options);
+                console.log('Offscreen: start recording', message.options);
                 await startRecording(message.options);
-                console.log('OFFSCREEN: Recording started successfully, sending response');
+                console.log('Offscreen: recording started');
                 sendResponse({ success: true });
                 break;
                 
             case 'STOP_RECORDING':
-                console.log('OFFSCREEN: Stopping recording');
+                console.log('Offscreen: stop recording');
                 await stopRecording();
-                console.log('OFFSCREEN: Recording stopped successfully, sending response');
+                console.log('Offscreen: recording stopped');
                 sendResponse({ success: true });
                 break;
                 
             case 'TOGGLE_AUDIO_RECORDING':
-                console.log('OFFSCREEN: Toggling audio:', message.enabled);
+                console.log('Offscreen: toggle audio', message.enabled);
                 toggleSystemAudio(message.enabled);
                 sendResponse({ success: true });
                 break;
                 
             case 'TOGGLE_MICROPHONE_RECORDING':
-                console.log('OFFSCREEN: Toggling microphone:', message.enabled);
+                console.log('Offscreen: toggle mic', message.enabled);
                 toggleMicrophone(message.enabled);
                 sendResponse({ success: true });
                 break;
                 
             case 'TOGGLE_PAUSE_RECORDING':
-                console.log('OFFSCREEN: Toggling pause:', message.paused);
+                console.log('Offscreen: toggle pause', message.paused);
                 togglePause(message.paused);
                 sendResponse({ success: true });
                 break;
                 
             case 'PING_OFFSCREEN':
-                console.log('OFFSCREEN: Ping received');
+                console.log('Offscreen: ping');
                 sendResponse({ success: true, pong: true });
                 break;
                 
             default:
-                console.warn('OFFSCREEN: Unknown message type:', message.type);
+                console.warn('Offscreen: unknown message type', message.type);
                 sendResponse({ success: false, error: 'Unknown message type' });
         }
     } catch (error) {
-        console.error('OFFSCREEN: Error handling message:', error);
+        console.error('Offscreen: message handler error', error);
         sendResponse({ success: false, error: error.message });
     }
     
@@ -84,7 +84,7 @@ async function startRecording(options = {}) {
             ...options
         };
         
-        console.log('OFFSCREEN: Recording options:', recordingOptions);
+        console.log('Offscreen: recording options', recordingOptions);
         
         // Request tab capture with clearer guidance
         displayStream = await navigator.mediaDevices.getDisplayMedia({
@@ -97,7 +97,7 @@ async function startRecording(options = {}) {
             audio: recordingOptions.includeSystemAudio
         });
         
-        console.log('OFFSCREEN: Display stream obtained');
+        console.log('Offscreen: display stream obtained');
         updateStatus('Recording started successfully!');
         
         // Get microphone stream if requested
@@ -110,41 +110,24 @@ async function startRecording(options = {}) {
                         autoGainControl: true
                     }
                 });
-                console.log('OFFSCREEN: Microphone stream obtained');
+                console.log('Offscreen: microphone stream obtained');
             } catch (micError) {
-                console.warn('OFFSCREEN: Could not get microphone access:', micError);
+                console.warn('Offscreen: microphone access failed', micError);
                 microphoneStream = null;
             }
         }
         
-        // Combine audio streams if we have multiple audio sources
+        // Build audio graph via WebAudio so toggles always work
         const videoTrack = displayStream.getVideoTracks()[0];
         const displayAudioTracks = displayStream.getAudioTracks();
         const microphoneAudioTracks = microphoneStream ? microphoneStream.getAudioTracks() : [];
-        
-        console.log('OFFSCREEN: Audio tracks - Display:', displayAudioTracks.length, 'Microphone:', microphoneAudioTracks.length);
-        
-        if (displayAudioTracks.length > 0 && microphoneAudioTracks.length > 0) {
-            // Need to merge audio streams
-            console.log('OFFSCREEN: Merging audio streams...');
-            combinedStream = await createCombinedStream(videoTrack, displayAudioTracks, microphoneAudioTracks);
-        } else if (displayAudioTracks.length > 0) {
-            // Only display audio
-            console.log('OFFSCREEN: Using display audio only');
-            combinedStream = new MediaStream([videoTrack, ...displayAudioTracks]);
-        } else if (microphoneAudioTracks.length > 0) {
-            // Only microphone audio
-            console.log('OFFSCREEN: Using microphone audio only');
-            combinedStream = new MediaStream([videoTrack, ...microphoneAudioTracks]);
-        } else {
-            // No audio
-            console.log('OFFSCREEN: No audio tracks, video only');
-            combinedStream = new MediaStream([videoTrack]);
-        }
+        console.log('Offscreen: audio tracks - display', displayAudioTracks.length, 'mic', microphoneAudioTracks.length);
+        const mixedTracks = await createMixedAudioTracks(displayAudioTracks, microphoneAudioTracks);
+        combinedStream = new MediaStream([videoTrack, ...mixedTracks]);
         
         // Create MediaRecorder
         const mimeType = getSupportedMimeType();
-        console.log('OFFSCREEN: Using MIME type:', mimeType);
+        console.log('Offscreen: mime type', mimeType);
         
         mediaRecorder = new MediaRecorder(combinedStream, {
             mimeType: mimeType,
@@ -156,17 +139,17 @@ async function startRecording(options = {}) {
         mediaRecorder.ondataavailable = (event) => {
             if (event.data.size > 0) {
                 recordedChunks.push(event.data);
-                console.log('OFFSCREEN: Recorded chunk:', event.data.size, 'bytes');
+                console.log('Offscreen: recorded chunk', event.data.size, 'bytes');
             }
         };
         
         mediaRecorder.onstop = async () => {
-            console.log('OFFSCREEN: Recording stopped, processing video...');
+            console.log('Offscreen: processing video');
             await processRecordedVideo();
         };
         
         mediaRecorder.onerror = (event) => {
-            console.error('OFFSCREEN: MediaRecorder error:', event.error);
+            console.error('Offscreen: MediaRecorder error', event.error);
             updateStatus('Recording error: ' + event.error);
             
             // Send error details to service worker
@@ -185,16 +168,16 @@ async function startRecording(options = {}) {
         mediaRecorder.start(1000); // Collect data every second
         
         updateStatus('Recording in progress...');
-        console.log('OFFSCREEN: Recording started successfully');
+        console.log('Offscreen: recording started');
         
         // Handle stream ending (user stops sharing)
         displayStream.getVideoTracks()[0].addEventListener('ended', () => {
-            console.log('OFFSCREEN: User stopped screen sharing');
+            console.log('Offscreen: user stopped screen sharing');
             stopRecording();
         });
         
     } catch (error) {
-        console.error('OFFSCREEN: Error starting recording:', error);
+        console.error('Offscreen: start recording error', error);
         updateStatus('Error: ' + error.message);
         
         // Send error details to service worker with more context
@@ -232,7 +215,7 @@ async function startRecording(options = {}) {
 
 async function stopRecording() {
     try {
-        console.log('OFFSCREEN: Stopping recording...');
+        console.log('Offscreen: stopping');
         updateStatus('Stopping recording...');
         
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -260,17 +243,17 @@ async function stopRecording() {
             audioContext = null;
         }
         
-        console.log('OFFSCREEN: Recording stopped and streams cleaned up');
+        console.log('Offscreen: streams cleaned up');
         
     } catch (error) {
-        console.error('OFFSCREEN: Error stopping recording:', error);
+        console.error('Offscreen: stop recording error', error);
         throw error;
     }
 }
 
 async function createCombinedStream(videoTrack, displayAudioTracks, microphoneAudioTracks) {
     try {
-        console.log('OFFSCREEN: Creating combined audio stream...');
+        console.log('Offscreen: creating combined audio stream');
         
         // Create audio context
         audioContext = new AudioContext();
@@ -306,21 +289,57 @@ async function createCombinedStream(videoTrack, displayAudioTracks, microphoneAu
             ...destination.stream.getAudioTracks()
         ]);
         
-        console.log('OFFSCREEN: Combined stream created successfully');
+        console.log('Offscreen: combined stream ready');
         return combinedStream;
         
     } catch (error) {
-        console.error('OFFSCREEN: Error creating combined stream:', error);
+        console.error('Offscreen: create combined stream error', error);
         throw error;
+    }
+}
+
+// Always create a destination and route whatever sources are available through gain nodes
+async function createMixedAudioTracks(displayAudioTracks, microphoneAudioTracks) {
+    try {
+        if (audioContext) {
+            try { await audioContext.close(); } catch (e) {}
+        }
+        audioContext = new AudioContext();
+        const destination = audioContext.createMediaStreamDestination();
+
+        // Display/system audio path
+        displayGain = null;
+        if (displayAudioTracks && displayAudioTracks.length > 0) {
+            const displaySource = audioContext.createMediaStreamSource(new MediaStream(displayAudioTracks));
+            displayGain = audioContext.createGain();
+            displayGain.gain.value = 0.8;
+            displaySource.connect(displayGain);
+            displayGain.connect(destination);
+        }
+
+        // Microphone path
+        microphoneGain = null;
+        if (microphoneAudioTracks && microphoneAudioTracks.length > 0) {
+            const micSource = audioContext.createMediaStreamSource(new MediaStream(microphoneAudioTracks));
+            microphoneGain = audioContext.createGain();
+            microphoneGain.gain.value = 1.0;
+            micSource.connect(microphoneGain);
+            microphoneGain.connect(destination);
+        }
+
+        return destination.stream.getAudioTracks();
+    } catch (error) {
+        console.error('Offscreen: mixed audio tracks error', error);
+        return [...(displayAudioTracks || []), ...(microphoneAudioTracks || [])];
     }
 }
 
 async function processRecordedVideo() {
     try {
-        console.log('OFFSCREEN: Processing', recordedChunks.length, 'video chunks');
+        console.log('Offscreen: processing', recordedChunks.length, 'chunks');
         
         if (recordedChunks.length === 0) {
-            console.warn('OFFSCREEN: No recorded chunks available');
+            console.warn('Offscreen: no recorded chunks');
             return;
         }
         
@@ -328,13 +347,23 @@ async function processRecordedVideo() {
         const mimeType = getSupportedMimeType();
         const videoBlob = new Blob(recordedChunks, { type: mimeType });
         
-        console.log('OFFSCREEN: Video blob created:', videoBlob.size, 'bytes');
+        console.log('Offscreen: video blob created', videoBlob.size, 'bytes');
         
         // Convert blob to base64 for transmission
         const base64Data = await blobToBase64(videoBlob);
         
-        console.log('OFFSCREEN: Video converted to base64, length:', base64Data.length);
+        console.log('Offscreen: base64 length', base64Data.length);
         
+        // Compute accurate duration from the encoded blob (in milliseconds)
+        let durationMs = 0;
+        try {
+            durationMs = await getBlobDurationMs(videoBlob);
+            console.log('Offscreen: duration(ms)', durationMs);
+        } catch (durErr) {
+            console.warn('Offscreen: duration compute failed, fallback', durErr);
+            durationMs = recordedChunks && recordedChunks.length ? recordedChunks.length * 1000 : 0;
+        }
+
         // Send video data back to service worker
         const response = await chrome.runtime.sendMessage({
             type: 'VIDEO_RECORDED',
@@ -342,15 +371,15 @@ async function processRecordedVideo() {
                 videoData: base64Data,
                 mimeType: mimeType,
                 size: videoBlob.size,
-                duration: calculateDuration()
+                duration: durationMs
             }
         });
         
-        console.log('OFFSCREEN: Video data sent to service worker, response:', response);
+        console.log('Offscreen: video data sent, response:', response);
         updateStatus('Recording completed and sent to service worker');
         
     } catch (error) {
-        console.error('OFFSCREEN: Error processing video:', error);
+        console.error('Offscreen: process video error', error);
         updateStatus('Error processing video: ' + error.message);
         
         // Send error details to service worker
@@ -397,17 +426,37 @@ function blobToBase64(blob) {
     });
 }
 
-function calculateDuration() {
-    // Simple duration calculation based on chunks
-    // In a real implementation, you might want to get this from the MediaRecorder
-    return recordedChunks.length; // Approximate seconds
+// Derive accurate duration by loading the blob into a temporary <video>
+function getBlobDurationMs(blob) {
+    return new Promise((resolve, reject) => {
+        try {
+            const temp = document.createElement('video');
+            temp.preload = 'metadata';
+            temp.muted = true;
+            temp.src = URL.createObjectURL(blob);
+            const cleanup = () => {
+                try { URL.revokeObjectURL(temp.src); } catch (_) {}
+            };
+            temp.onloadedmetadata = () => {
+                const seconds = isFinite(temp.duration) ? temp.duration : 0;
+                cleanup();
+                resolve(Math.max(0, Math.round(seconds * 1000)));
+            };
+            temp.onerror = () => {
+                cleanup();
+                reject(new Error('metadata load failed'));
+            };
+        } catch (e) {
+            reject(e);
+        }
+    });
 }
 
 // Toolbar control functions
 function toggleSystemAudio(enabled) {
     if (displayGain) {
         displayGain.gain.value = enabled ? 0.8 : 0;
-        console.log('OFFSCREEN: System audio', enabled ? 'enabled' : 'disabled');
+        console.log('Offscreen: system audio', enabled ? 'enabled' : 'disabled');
         updateStatus(enabled ? 'System audio enabled' : 'System audio disabled');
     }
 }
@@ -415,7 +464,7 @@ function toggleSystemAudio(enabled) {
 function toggleMicrophone(enabled) {
     if (microphoneGain) {
         microphoneGain.gain.value = enabled ? 1.0 : 0;
-        console.log('OFFSCREEN: Microphone', enabled ? 'enabled' : 'disabled');
+        console.log('Offscreen: microphone', enabled ? 'enabled' : 'disabled');
         updateStatus(enabled ? 'Microphone enabled' : 'Microphone disabled');
     }
 }
@@ -426,11 +475,11 @@ function togglePause(paused) {
     if (mediaRecorder) {
         if (paused && mediaRecorder.state === 'recording') {
             mediaRecorder.pause();
-            console.log('OFFSCREEN: Recording paused');
+            console.log('Offscreen: paused');
             updateStatus('Recording paused');
         } else if (!paused && mediaRecorder.state === 'paused') {
             mediaRecorder.resume();
-            console.log('OFFSCREEN: Recording resumed');
+            console.log('Offscreen: resumed');
             updateStatus('Recording resumed');
         }
     }
@@ -438,7 +487,7 @@ function togglePause(paused) {
 
 // Handle page unload
 window.addEventListener('beforeunload', () => {
-    console.log('OFFSCREEN: Page unloading, cleaning up...');
+    console.log('Offscreen: unloading, cleanup');
     stopRecording();
 });
 
