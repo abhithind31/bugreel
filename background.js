@@ -213,8 +213,42 @@ function scrubPiiFromNetworkRequest(request) {
         requestHeaders: scrubPiiFromHeaders(request.requestHeaders),
         responseHeaders: scrubPiiFromHeaders(request.responseHeaders),
         requestBody: request.requestBody ? scrubPiiFromObject(request.requestBody) : request.requestBody,
-        responseBody: request.responseBody ? scrubPiiFromObject(request.responseBody) : request.responseBody
+        responseBody: request.responseBody ? scrubPiiFromResponseBody(request.responseBody, request.responseBodyEncoding) : request.responseBody,
+        responseBodyEncoding: request.responseBodyEncoding
     };
+}
+
+function scrubPiiFromResponseBody(responseBody, encoding) {
+    if (!responseBody) {
+        return responseBody;
+    }
+    
+    try {
+        let bodyToScrub = responseBody;
+        
+        // If it's base64 encoded, decode it first for scrubbing (but we'll keep the truncated version)
+        if (encoding === 'base64') {
+            try {
+                bodyToScrub = atob(responseBody);
+            } catch (error) {
+                // If decoding fails, treat as text
+                bodyToScrub = responseBody;
+            }
+        }
+        
+        // Try to parse as JSON first
+        try {
+            const jsonData = JSON.parse(bodyToScrub);
+            const scrubbedJson = scrubPiiFromObject(jsonData);
+            return JSON.stringify(scrubbedJson);
+        } catch (jsonError) {
+            // Not JSON, scrub as string
+            return scrubPiiFromString(bodyToScrub);
+        }
+    } catch (error) {
+        console.error('SERVICE WORKER: Error scrubbing response body:', error);
+        return responseBody; // Return original if scrubbing fails
+    }
 }
 
 function scrubPiiFromConsoleLog(log) {
@@ -364,6 +398,12 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     
     try {
         switch (message.type) {
+            case 'NETWORK_RESPONSE_BODY':
+                // Handle response body captured by content script
+                handleNetworkResponseBody(message);
+                sendResponse({ success: true });
+                break;
+                
             case 'START_CAPTURE':
                 console.log('ServiceWorker: START_CAPTURE');
                 await startCapture();
@@ -382,7 +422,9 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
                 break;
                 
             case 'CONSOLE_LOG':
+                console.log('SERVICE WORKER: 📝 Console log received:', message.payload);
                 await handleConsoleLog(message.payload);
+                sendResponse({ success: true });
                 break;
                 
             case 'USER_ACTION':
@@ -715,6 +757,9 @@ async function injectContentScript(tabId) {
 
 // Network request logging
 let networkRequestsInFlight = new Map();
+let debuggerAttached = false;
+let currentTabId = null;
+let fallbackFetchesInProgress = new Set(); // Track URLs being fetched to prevent duplicates
 
 async function startNetworkLogging() {
     chrome.webRequest.onBeforeRequest.addListener(
@@ -745,6 +790,12 @@ async function startNetworkLogging() {
         onErrorOccurred,
         { urls: ['<all_urls>'] }
     );
+    
+    // Start debugger for response body capture
+    await startDebuggerForResponseBodies();
+    
+    // Also try alternative method via content script fetch interception
+    await startContentScriptNetworkInterception();
 }
 
 async function stopNetworkLogging() {
@@ -753,11 +804,468 @@ async function stopNetworkLogging() {
     chrome.webRequest.onHeadersReceived.removeListener(onHeadersReceived);
     chrome.webRequest.onCompleted.removeListener(onCompleted);
     chrome.webRequest.onErrorOccurred.removeListener(onErrorOccurred);
+    
+    // Stop debugger for response body capture
+    await stopDebuggerForResponseBodies();
+}
+
+// Debugger functions for response body capture
+async function startDebuggerForResponseBodies() {
+    try {
+        // Get current active tab
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs.length > 0) {
+            currentTabId = tabs[0].id;
+            
+            console.log('SERVICE WORKER: Attempting to attach debugger to tab:', currentTabId);
+            
+            // Attach debugger to the tab
+            await chrome.debugger.attach({ tabId: currentTabId }, '1.3');
+            debuggerAttached = true;
+            
+            console.log('SERVICE WORKER: ✅ Debugger attached successfully');
+            
+            // Enable Network domain
+            await chrome.debugger.sendCommand({ tabId: currentTabId }, 'Network.enable');
+            console.log('SERVICE WORKER: ✅ Network domain enabled');
+            
+            // Listen for Network.responseReceived events
+            chrome.debugger.onEvent.addListener(onDebuggerEvent);
+            
+            console.log('SERVICE WORKER: ✅ Debugger event listener added for response body capture');
+        } else {
+            console.error('SERVICE WORKER: No active tab found for debugger attachment');
+        }
+    } catch (error) {
+        console.error('SERVICE WORKER: ❌ Failed to attach debugger:', error);
+        debuggerAttached = false;
+        
+        // Try alternative approach - just log but continue without response bodies
+        console.log('SERVICE WORKER: Continuing without response body capture. Error details:', {
+            message: error.message,
+            stack: error.stack
+        });
+    }
+}
+
+async function stopDebuggerForResponseBodies() {
+    try {
+        if (debuggerAttached && currentTabId) {
+            chrome.debugger.onEvent.removeListener(onDebuggerEvent);
+            await chrome.debugger.detach({ tabId: currentTabId });
+            debuggerAttached = false;
+            currentTabId = null;
+            console.log('SERVICE WORKER: Debugger detached');
+        }
+    } catch (error) {
+        console.error('SERVICE WORKER: Failed to detach debugger:', error);
+    }
+}
+
+async function onDebuggerEvent(source, method, params) {
+    if (source.tabId !== currentTabId) return;
+    
+    console.log('SERVICE WORKER: Debugger event received:', method, 'for tab:', source.tabId);
+    
+    if (method === 'Network.responseReceived') {
+        const requestId = params.requestId;
+        const request = networkRequestsInFlight.get(requestId);
+        
+        console.log('SERVICE WORKER: Response received for request:', requestId, 'URL:', params.response?.url);
+        
+        if (request) {
+            // Wait a bit for the response to be fully loaded
+            setTimeout(async () => {
+                try {
+                    // Get response body
+                    const response = await chrome.debugger.sendCommand(
+                        { tabId: currentTabId },
+                        'Network.getResponseBody',
+                        { requestId: requestId }
+                    );
+                    
+                    console.log('SERVICE WORKER: getResponseBody response:', {
+                        requestId,
+                        url: request.url,
+                        hasBody: !!response?.body,
+                        bodyLength: response?.body?.length || 0,
+                        isBase64: response?.base64Encoded,
+                        requestType: request.type,
+                        statusCode: request.statusCode,
+                        contentType: request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type')?.value,
+                        contentEncoding: request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-encoding')?.value,
+                        contentLength: request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-length')?.value,
+                        response
+                    });
+                    
+                    if (response && response.body) {
+                        request.responseBody = truncateResponseBody(response.body, response.base64Encoded);
+                        request.responseBodyEncoding = response.base64Encoded ? 'base64' : 'text';
+                        console.log('SERVICE WORKER: ✅ Response body captured for', request.url, 'Length:', response.body.length);
+                    } else {
+                        // Check if this is a navigation request (main document)
+                        const isMainDocument = request.type === 'main_frame' || request.type === 'document';
+                        const contentEncoding = request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-encoding')?.value;
+                        
+                        if (isMainDocument) {
+                            const statusCode = request.statusCode;
+                            const contentLength = request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-length')?.value;
+                            const contentType = request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type')?.value || '';
+                            
+                            // Check if this is actually a JSON API endpoint accessed via navigation
+                            if (contentType.includes('application/json')) {
+                                // Treat this as a compressed JSON response, not a main document
+                                if (contentEncoding === 'gzip' || contentEncoding === 'br' || contentEncoding === 'zstd') {
+                                    try {
+                                        // Attempt to fetch with no-compression headers to get JSON content
+                                        const jsonResponse = await fetch(request.url, {
+                                            headers: { 'Accept-Encoding': 'identity', 'Accept': 'application/json' },
+                                            method: 'GET'
+                                        });
+                                        
+                                        if (jsonResponse.ok) {
+                                            const jsonText = await jsonResponse.text();
+                                            request.responseBody = truncateResponseBody(jsonText, false);
+                                            request.responseBodyEncoding = 'text';
+                                            console.log('SERVICE WORKER: ✅ Got JSON content for main document navigation:', request.url);
+                                        } else {
+                                            throw new Error('Fetch failed');
+                                        }
+                                    } catch (fetchError) {
+                                        request.responseBody = `[Compressed JSON API Response - ${contentEncoding}]\n\nContent-Type: ${contentType}\nContent-Length: ${contentLength || 'Unknown'} bytes\n\nThis is a JSON API endpoint accessed via browser navigation. The response is compressed and cannot be accessed via Chrome debugger API.\n\nTypical content:\n• JSON data array or object\n• API response data\n• Structured information`;
+                                        console.log('SERVICE WORKER: ℹ️ Could not fetch uncompressed JSON for main document:', fetchError.message);
+                                    }
+                                } else {
+                                    // Uncompressed JSON - try to fetch it
+                                    try {
+                                        const jsonResponse = await fetch(request.url, {
+                                            headers: { 'Accept': 'application/json' },
+                                            method: 'GET'
+                                        });
+                                        
+                                        if (jsonResponse.ok) {
+                                            const jsonText = await jsonResponse.text();
+                                            request.responseBody = truncateResponseBody(jsonText, false);
+                                            request.responseBodyEncoding = 'text';
+                                            console.log('SERVICE WORKER: ✅ Got JSON content for main document navigation:', request.url);
+                                        } else {
+                                            throw new Error('Fetch failed');
+                                        }
+                                    } catch (fetchError) {
+                                        request.responseBody = `[JSON API Response - Navigation]\n\nContent-Type: ${contentType}\nContent-Length: ${contentLength || 'Unknown'} bytes\n\nThis is a JSON API endpoint accessed via browser navigation, but content could not be fetched.`;
+                                        console.log('SERVICE WORKER: ℹ️ Could not fetch JSON for main document:', fetchError.message);
+                                    }
+                                }
+                            } else if (statusCode >= 400) {
+                                // Try to fetch the error page content
+                                try {
+                                    const errorPageResponse = await fetch(request.url, {
+                                        method: 'GET',
+                                        headers: { 'Accept': 'text/html' }
+                                    });
+                                    
+                                    if (errorPageResponse.status === statusCode) {
+                                        const errorHtml = await errorPageResponse.text();
+                                        const truncatedHtml = errorHtml.substring(0, 500);
+                                        request.responseBody = `[${statusCode} Error Page - Content fetched:]\n\n${truncatedHtml}${errorHtml.length > 500 ? '\n\n[Content truncated - full error page was ' + errorHtml.length + ' characters]' : ''}`;
+                                        console.log('SERVICE WORKER: ✅ Fetched error page content for', request.url);
+                                    } else {
+                                        throw new Error('Status mismatch');
+                                    }
+                                } catch (fetchError) {
+                                    request.responseBody = `[${statusCode} Error Page - Main document navigation]\n\nContent-Length: ${contentLength || 'Unknown'} bytes\n\nThis is likely an error page (HTML) but cannot be accessed via Chrome debugger API for main document navigations.\n\nTypical content:\n• Error message and description\n• Page not found information\n• Site navigation/branding\n• Troubleshooting links\n\nNote: To see the actual error page content, view the page directly in the browser tab.`;
+                                    console.log('SERVICE WORKER: ℹ️ Could not fetch error page content:', fetchError.message);
+                                }
+                            } else {
+                                request.responseBody = `[Main document response - HTML page]\n\nContent-Length: ${contentLength || 'Unknown'} bytes\n\nThis is a full HTML page but cannot be accessed via Chrome debugger API for main document navigations.`;
+                            }
+                            console.log('SERVICE WORKER: ℹ️ Main document request detected for', request.url, 'Status:', statusCode);
+                        } else if (contentEncoding === 'gzip' || contentEncoding === 'br' || contentEncoding === 'zstd') {
+                            const contentType = request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type')?.value || '';
+                            const fileExtension = request.url.split('.').pop()?.split('?')[0];
+                            
+                            // Try to fetch a small sample if it's a text-based resource
+                            if (contentType.includes('javascript') || contentType.includes('css') || contentType.includes('json') || contentType.includes('text/')) {
+                                try {
+                                    // Attempt to fetch with no-compression headers
+                                    const sampleResponse = await fetch(request.url, {
+                                        headers: { 'Accept-Encoding': 'identity' },
+                                        method: 'GET'
+                                    });
+                                    
+                                    if (sampleResponse.ok) {
+                                        const sampleText = await sampleResponse.text();
+                                        request.responseBody = `[Compressed ${contentEncoding} response - Sample uncompressed content:]\n\n${sampleText.substring(0, 200)}${sampleText.length > 200 ? '...\n\n[Content truncated - full response was compressed]' : ''}`;
+                                        console.log('SERVICE WORKER: ✅ Got uncompressed sample for', request.url);
+                                    } else {
+                                        throw new Error('Fetch failed');
+                                    }
+                                } catch (fetchError) {
+                                    request.responseBody = `[Compressed ${contentEncoding} response - Content-Type: ${contentType}${fileExtension ? ', File: .' + fileExtension : ''}]\n\nNote: Compressed responses cannot be accessed via Chrome debugger API. This typically contains:\n${getTypicalContent(contentType, fileExtension)}`;
+                                    console.log('SERVICE WORKER: ℹ️ Could not fetch uncompressed version:', fetchError.message);
+                                }
+                            } else {
+                                request.responseBody = `[Compressed ${contentEncoding} response - Content-Type: ${contentType}${fileExtension ? ', File: .' + fileExtension : ''}]\n\nNote: Compressed responses cannot be accessed via Chrome debugger API. This typically contains:\n${getTypicalContent(contentType, fileExtension)}`;
+                            }
+                            
+                            console.log('SERVICE WORKER: ℹ️ Compressed response detected for', request.url, 'Type:', contentType, 'Encoding:', contentEncoding);
+                        } else {
+                            // Analyze why there's no response body
+                            const contentLength = request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-length')?.value;
+                            const statusCode = request.statusCode;
+                            
+                            if (contentLength === '0') {
+                                request.responseBody = `[Empty response - Server sent Content-Length: 0]\n\nThis is normal for:\n• Analytics/telemetry endpoints\n• Status/health checks\n• Fire-and-forget API calls\n• ${statusCode === 202 ? 'Async processing (202 Accepted)' : 'Success confirmations'}`;
+                            } else if (statusCode === 204) {
+                                request.responseBody = `[204 No Content - Success with no response body]`;
+                            } else if (statusCode >= 300 && statusCode < 400) {
+                                request.responseBody = `[${statusCode} Redirect - No body content]`;
+                            } else {
+                                request.responseBody = null;
+                            }
+                            console.log('SERVICE WORKER: ⚠️ No response body for', request.url, 'Content-Length:', contentLength, 'Status:', statusCode);
+                        }
+                    }
+                } catch (error) {
+                    // Some requests may not have response bodies or may fail to retrieve
+                    request.responseBody = null;
+                    console.log('SERVICE WORKER: ❌ Could not get response body for request:', requestId, 'URL:', request.url, 'Error:', error.message);
+                }
+            }, 100); // Wait 100ms for response to be fully loaded
+        } else {
+            console.log('SERVICE WORKER: ⚠️ No request found in flight map for:', requestId);
+        }
+    }
+    
+    if (method === 'Network.loadingFinished') {
+        const requestId = params.requestId;
+        const request = networkRequestsInFlight.get(requestId);
+        
+        if (request && !request.responseBody) {
+            // Try to get response body when loading is finished
+            setTimeout(async () => {
+                try {
+                    const response = await chrome.debugger.sendCommand(
+                        { tabId: currentTabId },
+                        'Network.getResponseBody',
+                        { requestId: requestId }
+                    );
+                    
+                    if (response && response.body) {
+                        request.responseBody = truncateResponseBody(response.body, response.base64Encoded);
+                        request.responseBodyEncoding = response.base64Encoded ? 'base64' : 'text';
+                        console.log('SERVICE WORKER: ✅ Response body captured on loadingFinished for', request.url);
+                    }
+                } catch (error) {
+                    console.log('SERVICE WORKER: ❌ Failed to get response body on loadingFinished:', error.message);
+                }
+            }, 50);
+        }
+    }
+}
+
+// Alternative method: Content script network interception
+async function startContentScriptNetworkInterception() {
+    try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs.length > 0) {
+            const tabId = tabs[0].id;
+            
+            // Inject network interception script
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                func: () => {
+                    // Intercept fetch requests
+                    const originalFetch = window.fetch;
+                    window.fetch = async function(...args) {
+                        const response = await originalFetch.apply(this, args);
+                        
+                        // Clone response to read body
+                        const clonedResponse = response.clone();
+                        try {
+                            const contentType = response.headers.get('content-type') || '';
+                            const contentEncoding = response.headers.get('content-encoding') || '';
+                            
+                            let body = '';
+                            if (contentEncoding.includes('gzip') || contentEncoding.includes('br') || contentEncoding.includes('zstd')) {
+                                body = `[Compressed response (${contentEncoding})]`;
+                            } else if (contentType.includes('text/') || contentType.includes('application/json') || contentType.includes('application/xml')) {
+                                const responseText = await clonedResponse.text();
+                                body = responseText.substring(0, 300); // Truncate to 300 chars
+                            } else {
+                                body = `[Binary response: ${contentType}]`;
+                            }
+                            
+                            // Send response body to background script
+                            chrome.runtime.sendMessage({
+                                type: 'NETWORK_RESPONSE_BODY',
+                                url: response.url,
+                                status: response.status,
+                                body: body,
+                                contentType: contentType,
+                                contentEncoding: contentEncoding,
+                                timestamp: Date.now()
+                            });
+                        } catch (error) {
+                            console.log('Failed to read response body:', error);
+                            chrome.runtime.sendMessage({
+                                type: 'NETWORK_RESPONSE_BODY',
+                                url: response.url,
+                                status: response.status,
+                                body: `[Error reading response: ${error.message}]`,
+                                timestamp: Date.now()
+                            });
+                        }
+                        
+                        return response;
+                    };
+                    
+                    // Intercept XMLHttpRequest
+                    const originalXHROpen = XMLHttpRequest.prototype.open;
+                    const originalXHRSend = XMLHttpRequest.prototype.send;
+                    
+                    XMLHttpRequest.prototype.open = function(method, url, ...args) {
+                        this._url = url;
+                        this._method = method;
+                        return originalXHROpen.apply(this, [method, url, ...args]);
+                    };
+                    
+                    XMLHttpRequest.prototype.send = function(...args) {
+                        this.addEventListener('load', function() {
+                            try {
+                                const responseText = this.responseText || '';
+                                chrome.runtime.sendMessage({
+                                    type: 'NETWORK_RESPONSE_BODY',
+                                    url: this._url,
+                                    status: this.status,
+                                    body: responseText.substring(0, 300), // Truncate to 300 chars
+                                    timestamp: Date.now()
+                                });
+                            } catch (error) {
+                                console.log('Failed to capture XHR response:', error);
+                            }
+                        });
+                        
+                        return originalXHRSend.apply(this, args);
+                    };
+                }
+            });
+            
+            console.log('SERVICE WORKER: ✅ Content script network interception started');
+        }
+    } catch (error) {
+        console.log('SERVICE WORKER: Failed to start content script network interception:', error);
+    }
+}
+
+// Handle response body from content script interception
+function handleNetworkResponseBody(message) {
+    try {
+        console.log('SERVICE WORKER: Received response body from content script:', {
+            url: message.url,
+            status: message.status,
+            bodyLength: message.body?.length || 0
+        });
+        
+        // Find matching request by URL and approximate timing
+        const requests = Array.from(networkRequestsInFlight.values());
+        const recentRequests = requests.filter(req => 
+            req.url === message.url && 
+            Math.abs(Date.now() - req.startTime) < 10000 // Within 10 seconds
+        );
+        
+        if (recentRequests.length > 0) {
+            const request = recentRequests[recentRequests.length - 1]; // Get most recent
+            request.responseBody = message.body || 'Empty response';
+            request.responseBodyEncoding = 'text';
+            console.log('SERVICE WORKER: ✅ Response body attached to request via content script');
+        } else {
+            console.log('SERVICE WORKER: ⚠️ No matching request found for response body from:', message.url);
+        }
+    } catch (error) {
+        console.log('SERVICE WORKER: Error handling response body from content script:', error);
+    }
+}
+
+// Helper function to describe typical content for compressed responses
+function getTypicalContent(contentType, fileExtension) {
+    if (contentType.includes('javascript') || fileExtension === 'js') {
+        return `• JavaScript code
+• Function definitions
+• Event handlers
+• DOM manipulation
+• AJAX calls
+• Libraries/frameworks`;
+    } else if (contentType.includes('css') || fileExtension === 'css') {
+        return `• CSS styles
+• Class definitions
+• Media queries
+• Animations
+• Layout rules`;
+    } else if (contentType.includes('html')) {
+        return `• HTML markup
+• Meta tags
+• Scripts and styles
+• Page content`;
+    } else if (contentType.includes('json')) {
+        return `• JSON data
+• API responses
+• Configuration
+• Data objects`;
+    } else if (contentType.includes('xml')) {
+        return `• XML data
+• Structured content
+• API responses`;
+    } else if (contentType.includes('text/')) {
+        return `• Plain text content
+• Data files
+• Logs or config`;
+    } else {
+        return `• Binary or encoded content
+• Media files
+• Compiled assets`;
+    }
+}
+
+// Function to truncate response body if too large
+function truncateResponseBody(body, isBase64Encoded = false) {
+    const maxLength = 300; // Maximum characters to keep
+    
+    if (!body) return body;
+    
+    if (isBase64Encoded) {
+        // For base64 data, we'll decode first to check actual content size
+        try {
+            const decoded = atob(body);
+            if (decoded.length > maxLength) {
+                // Re-encode truncated content
+                return btoa(decoded.substring(0, maxLength)) + '... [truncated]';
+            }
+            return body;
+        } catch (error) {
+            // If decoding fails, just truncate the base64 string
+            return body.length > maxLength ? body.substring(0, maxLength) + '... [truncated]' : body;
+        }
+    } else {
+        // For text content
+        if (body.length > maxLength) {
+            return body.substring(0, maxLength) + '... [truncated]';
+        }
+        return body;
+    }
 }
 
 // Network request event handlers
 function onBeforeRequest(details) {
     const startTime = Date.now();
+    
+    // Skip tracking our own fallback fetches to prevent infinite loops
+    if (fallbackFetchesInProgress.has(details.url)) {
+        console.log('SERVICE WORKER: ⏭️ Skipping tracking fallback fetch request:', details.url);
+        return;
+    }
+    
+    console.log('SERVICE WORKER: 🌐 Request started:', details.method, details.url, 'Type:', details.type);
     networkRequestsInFlight.set(details.requestId, {
         requestId: details.requestId,
         url: details.url,
@@ -769,6 +1277,11 @@ function onBeforeRequest(details) {
 }
 
 function onBeforeSendHeaders(details) {
+    // Skip our own fallback fetches
+    if (fallbackFetchesInProgress.has(details.url)) {
+        return;
+    }
+    
     const request = networkRequestsInFlight.get(details.requestId);
     if (request) {
         request.requestHeaders = details.requestHeaders;
@@ -776,6 +1289,11 @@ function onBeforeSendHeaders(details) {
 }
 
 function onHeadersReceived(details) {
+    // Skip our own fallback fetches
+    if (fallbackFetchesInProgress.has(details.url)) {
+        return;
+    }
+    
     const request = networkRequestsInFlight.get(details.requestId);
     if (request) {
         request.statusCode = details.statusCode;
@@ -784,11 +1302,75 @@ function onHeadersReceived(details) {
 }
 
 function onCompleted(details) {
+    // Skip our own fallback fetches
+    if (fallbackFetchesInProgress.has(details.url)) {
+        return;
+    }
+    
     const request = networkRequestsInFlight.get(details.requestId);
     if (request) {
         request.endTime = Date.now();
         request.duration = request.endTime - request.startTime;
         request.status = 'completed';
+        request.statusCode = details.statusCode;
+        
+        console.log('SERVICE WORKER: 🏁 Request completed:', details.method, details.url, 'Status:', details.statusCode, 'Has body:', !!request.responseBody);
+        
+        // If no response body was captured by debugger, try a fallback for JSON endpoints
+        if (!request.responseBody && details.statusCode === 200) {
+            const contentType = request.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type')?.value || '';
+            const isJsonEndpoint = contentType.includes('application/json');
+            const isNotFallbackFetch = !fallbackFetchesInProgress.has(details.url);
+            
+            if (isJsonEndpoint && isNotFallbackFetch) {
+                console.log('SERVICE WORKER: 🔄 Attempting fallback JSON fetch for:', details.url);
+                fallbackFetchesInProgress.add(details.url);
+                
+                // Try to fetch the JSON content as a fallback
+                setTimeout(async () => {
+                    try {
+                        const fallbackResponse = await fetch(details.url, {
+                            headers: { 
+                                'Accept': 'application/json',
+                                'Accept-Encoding': 'identity',
+                                'Cache-Control': 'no-cache' // Prevent cached responses
+                            },
+                            method: details.method || 'GET'
+                        });
+                        
+                        if (fallbackResponse.ok && fallbackResponse.headers.get('content-type')?.includes('application/json')) {
+                            const jsonText = await fallbackResponse.text();
+                            request.responseBody = truncateResponseBody(jsonText, false);
+                            request.responseBodyEncoding = 'text';
+                            console.log('SERVICE WORKER: ✅ Fallback JSON fetch successful for:', details.url, 'Body length:', jsonText.length);
+                            
+                            // Update the stored request - use a more direct approach
+                            const currentLogs = await getStoredData(STORAGE_KEYS.NETWORK_LOGS) || [];
+                            const requestIndex = currentLogs.findIndex(log => log.requestId === request.requestId);
+                            
+                            if (requestIndex !== -1) {
+                                currentLogs[requestIndex] = scrubPiiFromNetworkRequest(request);
+                                await chrome.storage.session.set({ [STORAGE_KEYS.NETWORK_LOGS]: currentLogs });
+                                console.log('SERVICE WORKER: 📝 Updated stored request with response body');
+                            } else {
+                                // If not found, save as new
+                                saveNetworkRequest(request);
+                                console.log('SERVICE WORKER: 📝 Saved new request with response body');
+                            }
+                        } else {
+                            console.log('SERVICE WORKER: ⚠️ Fallback fetch response not JSON or failed:', fallbackResponse.status);
+                        }
+                    } catch (error) {
+                        console.log('SERVICE WORKER: ❌ Fallback JSON fetch failed for:', details.url, error.message);
+                    } finally {
+                        // Always remove from in-progress set
+                        fallbackFetchesInProgress.delete(details.url);
+                    }
+                }, 100);
+            } else if (isJsonEndpoint && fallbackFetchesInProgress.has(details.url)) {
+                console.log('SERVICE WORKER: ⏭️ Skipping fallback fetch for:', details.url, '(already in progress)');
+            }
+        }
         
         // Move to completed requests
         saveNetworkRequest(request);
@@ -1629,10 +2211,81 @@ function createHtmlReport(reportData) {
         .status-4xx { background: #fff3cd; color: #856404; }
         .status-5xx { background: #f8d7da; color: #721c24; }
         
-        .collapsible { cursor:pointer; padding:6px 8px; background:#0f1113; border:1px solid rgba(255,255,255,.08); border-radius: 8px; margin-top:8px; color:#e5e7eb; }
-        .collapsible:hover { background:#13171a; }
+        .collapsible { 
+            cursor: pointer; 
+            padding: 8px 12px; 
+            background: #0f1113; 
+            border: 1px solid rgba(255,255,255,.08); 
+            border-radius: 8px; 
+            margin-top: 8px; 
+            color: #e5e7eb; 
+            font-weight: 600;
+            transition: background 0.2s ease;
+        }
+        .collapsible:hover { background: #13171a; }
         
-        .collapsible-content { display:none; padding:10px; background:#0f1113; border:1px solid rgba(255,255,255,.08); border-top:none; border-radius: 0 0 8px 8px; color:#b9c1c6; }
+        .request-headers-btn { border-left: 4px solid #28a745; }
+        .response-headers-btn { border-left: 4px solid #ffc107; }
+        .response-body-btn { border-left: 4px solid #17a2b8; }
+        
+        .collapsible-content { 
+            display: none; 
+            padding: 15px; 
+            background: #0f1113; 
+            border: 1px solid rgba(255,255,255,.08); 
+            border-top: none; 
+            border-radius: 0 0 8px 8px; 
+            color: #b9c1c6; 
+        }
+        
+        .headers-container {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        .header-row {
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            gap: 12px;
+        }
+        
+        .header-row:last-child {
+            border-bottom: none;
+        }
+        
+        .header-name {
+            color: #ffc107;
+            font-weight: bold;
+            min-width: 150px;
+            flex-shrink: 0;
+        }
+        
+        .header-value {
+            color: #e5e7eb;
+            word-break: break-all;
+            flex: 1;
+        }
+        
+        .response-body-container {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .response-body-content {
+            white-space: pre-wrap;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background: #1a1a1a;
+            color: #e5e7eb;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 0;
+            font-size: 12px;
+            line-height: 1.4;
+            max-height: 350px;
+            overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
         .request-url { color:#e5e7eb; word-break: break-all; margin: 6px 0; }
         .request-timing { color:#b9c1c6; font-size: 12px; }
         
@@ -1883,15 +2536,31 @@ function createHtmlReport(reportData) {
                                 </div>
                                 <div class="request-url">${escapeHtml(req.url)}</div>
                                 <div class="request-timing">Duration: ${req.duration || 'N/A'}ms</div>
-                                <div class="collapsible" onclick="toggleCollapsible(this)">
-                                    Show Headers
+                                <div class="collapsible request-headers-btn" onclick="toggleCollapsible(this)">
+                                    📥 Show Request Headers
                                 </div>
                                 <div class="collapsible-content">
-                                    <strong>Request Headers:</strong><br>
-                                    ${req.requestHeaders ? req.requestHeaders.map(h => `${h.name}: ${h.value}`).join('<br>') : 'None'}
-                                    <br><br>
-                                    <strong>Response Headers:</strong><br>
-                                    ${req.responseHeaders ? req.responseHeaders.map(h => `${h.name}: ${h.value}`).join('<br>') : 'None'}
+                                    <div class="headers-container">
+                                        ${req.requestHeaders ? req.requestHeaders.map(h => `<div class="header-row"><span class="header-name">${h.name}:</span> <span class="header-value">${h.value}</span></div>`).join('') : '<div class="no-data">No request headers</div>'}
+                                    </div>
+                                </div>
+                                
+                                <div class="collapsible response-headers-btn" onclick="toggleCollapsible(this)">
+                                    📤 Show Response Headers
+                                </div>
+                                <div class="collapsible-content">
+                                    <div class="headers-container">
+                                        ${req.responseHeaders ? req.responseHeaders.map(h => `<div class="header-row"><span class="header-name">${h.name}:</span> <span class="header-value">${h.value}</span></div>`).join('') : '<div class="no-data">No response headers</div>'}
+                                    </div>
+                                </div>
+                                
+                                <div class="collapsible response-body-btn" onclick="toggleCollapsible(this)">
+                                    📄 Show Response Body
+                                </div>
+                                <div class="collapsible-content">
+                                    <div class="response-body-container">
+                                        ${req.responseBody ? `<pre class="response-body-content">${req.responseBody}</pre>` : '<div class="no-data">No response body captured</div>'}
+                                    </div>
                                 </div>
                             </div>
                         `).join('') : 
@@ -1985,12 +2654,28 @@ function createHtmlReport(reportData) {
         // Collapsible sections
         function toggleCollapsible(element) {
             const content = element.nextElementSibling;
+            const currentText = element.textContent.trim();
+            
             if (content.style.display === 'none' || content.style.display === '') {
                 content.style.display = 'block';
-                element.textContent = 'Hide Headers';
+                // Update text based on current button type
+                if (currentText.includes('Request Headers')) {
+                    element.textContent = '📥 Hide Request Headers';
+                } else if (currentText.includes('Response Headers')) {
+                    element.textContent = '📤 Hide Response Headers';
+                } else if (currentText.includes('Response Body')) {
+                    element.textContent = '📄 Hide Response Body';
+                }
             } else {
                 content.style.display = 'none';
-                element.textContent = 'Show Headers';
+                // Restore original text
+                if (currentText.includes('Request Headers')) {
+                    element.textContent = '📥 Show Request Headers';
+                } else if (currentText.includes('Response Headers')) {
+                    element.textContent = '📤 Show Response Headers';
+                } else if (currentText.includes('Response Body')) {
+                    element.textContent = '📄 Show Response Body';
+                }
             }
         }
         
@@ -2418,6 +3103,11 @@ async function restartRecording() {
 
 // Create preview HTML for review before saving
 function createPreviewHtml(previewData) {
+    console.log('SERVICE WORKER: createPreviewHtml called with:', {
+        networkLogsCount: previewData.networkLogs?.length || 0,
+        firstNetworkLog: previewData.networkLogs?.[0]
+    });
+    
     const videoDataUrl = previewData.videoData && previewData.videoData.videoData ? 
         'data:' + previewData.videoData.mimeType + ';base64,' + previewData.videoData.videoData : null;
     
@@ -2726,6 +3416,389 @@ function createPreviewHtml(previewData) {
             opacity: 0.8;
         }
         
+        /* Detailed Data Section Styles */
+        .detailed-data-section {
+            margin-top: 30px;
+            background: #161a1d;
+            border-radius: 14px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+            border: 1px solid rgba(255,255,255,0.06);
+            overflow: hidden;
+        }
+        
+        .tab-navigation {
+            display: flex;
+            background: #1b2024;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .tab-button {
+            flex: 1;
+            padding: 16px 20px;
+            background: transparent;
+            border: none;
+            color: #b9c1c6;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-bottom: 3px solid transparent;
+        }
+        
+        .tab-button:hover {
+            background: rgba(255,255,255,0.05);
+            color: #e5e7eb;
+        }
+        
+        .tab-button.active {
+            color: #ffffff;
+            background: rgba(255,255,255,0.08);
+            border-bottom-color: #0066cc;
+        }
+        
+        .tab-content {
+            padding: 20px;
+        }
+        
+        .tab-panel {
+            display: none;
+        }
+        
+        .tab-panel.active {
+            display: block;
+        }
+        
+        .tab-panel h3 {
+            margin: 0 0 20px 0;
+            color: #ffffff;
+            font-size: 1.2em;
+        }
+        
+        /* Network Request Styles */
+        .network-requests {
+            space-y: 10px;
+        }
+        
+        .network-request-item {
+            background: #1b2024;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+        
+        .request-header {
+            padding: 16px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s ease;
+            border-left: 3px solid transparent;
+        }
+        
+        .request-header:hover {
+            background: rgba(255,255,255,0.05);
+            border-left-color: #0066cc;
+        }
+        
+        .request-summary {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex: 1;
+        }
+        
+        .method {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            min-width: 60px;
+            text-align: center;
+        }
+        
+        .method.get { background: #28a745; color: white; }
+        .method.post { background: #ffc107; color: #212529; }
+        .method.put { background: #17a2b8; color: white; }
+        .method.delete { background: #dc3545; color: white; }
+        .method.patch { background: #6f42c1; color: white; }
+        .method.unknown { background: #6c757d; color: white; }
+        
+        .url {
+            color: #e5e7eb;
+            font-family: monospace;
+            font-size: 13px;
+            word-break: break-all;
+            flex: 1;
+        }
+        
+        .status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 12px;
+            min-width: 60px;
+            text-align: center;
+        }
+        
+        .status-2xx { background: #28a745; color: white; }
+        .status-3xx { background: #ffc107; color: #212529; }
+        .status-4xx { background: #fd7e14; color: white; }
+        .status-5xx { background: #dc3545; color: white; }
+        .status-0xx { background: #6c757d; color: white; }
+        
+        .duration {
+            color: #b9c1c6;
+            font-size: 12px;
+            font-weight: 600;
+            min-width: 50px;
+            text-align: right;
+        }
+        
+        .toggle-icon {
+            color: #b9c1c6;
+            font-size: 12px;
+            transition: transform 0.2s ease;
+        }
+        
+        .toggle-icon.rotated {
+            transform: rotate(180deg);
+        }
+        
+        .request-details {
+            display: none;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            background: #0f1113;
+        }
+        
+        .request-details.open {
+            display: block !important;
+        }
+        
+        .request-tabs {
+            display: flex;
+            background: #161a1d;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .request-tab-btn {
+            padding: 12px 20px;
+            background: transparent;
+            border: none;
+            color: #b9c1c6;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-bottom: 2px solid transparent;
+        }
+        
+        .request-tab-btn:hover {
+            background: rgba(255,255,255,0.05);
+            color: #e5e7eb;
+        }
+        
+        .request-tab-btn.active {
+            color: #ffffff;
+            background: rgba(255,255,255,0.08);
+            border-bottom-color: #0066cc;
+        }
+        
+        .request-tab-content {
+            padding: 20px;
+        }
+        
+        .request-tab-panel {
+            display: none;
+        }
+        
+        .request-tab-panel.active {
+            display: block;
+        }
+        
+        .headers-section h4 {
+            color: #ffffff;
+            margin: 0 0 12px 0;
+            font-size: 14px;
+        }
+        
+        .headers-list {
+            background: #1b2024;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        
+        .header-item {
+            display: flex;
+            margin-bottom: 8px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .header-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .header-name {
+            color: #ffc107;
+            font-weight: 600;
+            min-width: 150px;
+            padding-right: 8px;
+        }
+        
+        .header-value {
+            color: #e5e7eb;
+            word-break: break-all;
+        }
+        
+        .response-body-section h4 {
+            color: #ffffff;
+            margin: 0 0 12px 0;
+            font-size: 14px;
+        }
+        
+        .response-body {
+            background: #1b2024;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.06);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .response-body pre {
+            margin: 0;
+            padding: 16px;
+            color: #e5e7eb;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        /* Console Logs Styles */
+        .console-logs {
+            background: #1b2024;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.06);
+            overflow: hidden;
+        }
+        
+        .console-log-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .console-log-item:last-child {
+            border-bottom: none;
+        }
+        
+        .console-log-item.log-error {
+            background: rgba(220, 53, 69, 0.1);
+            border-left: 3px solid #dc3545;
+        }
+        
+        .console-log-item.log-warn {
+            background: rgba(255, 193, 7, 0.1);
+            border-left: 3px solid #ffc107;
+        }
+        
+        .console-log-item.log-info {
+            background: rgba(23, 162, 184, 0.1);
+            border-left: 3px solid #17a2b8;
+        }
+        
+        .console-log-item.log-debug {
+            background: rgba(108, 117, 125, 0.1);
+            border-left: 3px solid #6c757d;
+        }
+        
+        .console-log-item .timestamp {
+            color: #b9c1c6;
+            white-space: nowrap;
+        }
+        
+        .console-log-item .level {
+            color: #ffc107;
+            font-weight: 600;
+            min-width: 50px;
+        }
+        
+        .console-log-item .message {
+            color: #e5e7eb;
+            flex: 1;
+            word-break: break-word;
+        }
+        
+        /* User Actions Styles */
+        .user-actions {
+            background: #1b2024;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.06);
+            overflow: hidden;
+        }
+        
+        .user-action-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .user-action-item:last-child {
+            border-bottom: none;
+        }
+        
+        .user-action-item .timestamp {
+            color: #b9c1c6;
+            white-space: nowrap;
+        }
+        
+        .user-action-item .action-type {
+            color: #28a745;
+            font-weight: 600;
+            min-width: 80px;
+        }
+        
+        .user-action-item .action-details {
+            color: #e5e7eb;
+            flex: 1;
+            word-break: break-word;
+        }
+        
+        /* Environment Data Styles */
+        .environment-data {
+            background: #1b2024;
+            color: #e5e7eb;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.06);
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            overflow-x: auto;
+            white-space: pre;
+        }
+        
+        .no-data {
+            text-align: center;
+            color: #6c757d;
+            font-style: italic;
+            padding: 40px;
+        }
+        
         @media (max-width: 768px) {
             .preview-content {
                 grid-template-columns: 1fr;
@@ -2739,6 +3812,20 @@ function createPreviewHtml(previewData) {
             .btn {
                 width: 100%;
                 max-width: 300px;
+            }
+            
+            .tab-navigation {
+                flex-direction: column;
+            }
+            
+            .request-summary {
+                flex-direction: column;
+                gap: 8px;
+                align-items: flex-start;
+            }
+            
+            .url {
+                font-size: 11px;
             }
         }
     </style>
@@ -2816,6 +3903,121 @@ function createPreviewHtml(previewData) {
             </div>
         </div>
         
+        <!-- Detailed Data Tabs -->
+        <div class="detailed-data-section">
+            <div class="tab-navigation">
+                <button class="tab-button active" data-tab="network">🌐 Network Requests</button>
+                <button class="tab-button" data-tab="console">📝 Console Logs</button>
+                <button class="tab-button" data-tab="actions">🖱️ User Actions</button>
+                <button class="tab-button" data-tab="environment">💻 Environment</button>
+            </div>
+            
+            <div class="tab-content">
+                <!-- Network Tab -->
+                <div id="network-tab" class="tab-panel active">
+                    <h3>Network Requests with Response Bodies</h3>
+                    ${previewData.networkLogs.length > 0 ? `
+                        <div class="network-requests">
+                            ${previewData.networkLogs.map((request, index) => `
+                                <div class="network-request-item" data-request-index="${index}">
+                                    <div class="request-header" onclick="toggleRequest(${index})">
+                                        <div class="request-summary">
+                                            <span class="method ${request.method?.toLowerCase() || 'unknown'}">${request.method || 'UNKNOWN'}</span>
+                                            <span class="url">${request.url || 'Unknown URL'}</span>
+                                            <span class="status status-${Math.floor((request.statusCode || 0) / 100)}xx">${request.statusCode || 'N/A'}</span>
+                                            <span class="duration">${request.duration || 0}ms</span>
+                                        </div>
+                                        <span class="toggle-icon">▼</span>
+                                    </div>
+                                    <div class="request-details" id="request-${index}">
+                                        <div class="request-tabs">
+                                            <button class="request-tab-btn active" onclick="showRequestTab(${index}, 'headers')">📋 Headers</button>
+                                            <button class="request-tab-btn" onclick="showRequestTab(${index}, 'response')">📄 Response Body</button>
+                                        </div>
+                                        
+                                        <div class="request-tab-content">
+                                            <div id="request-${index}-headers" class="request-tab-panel active">
+                                                <div class="headers-section">
+                                                    <h4>Request Headers</h4>
+                                                    <div class="headers-list">
+                                                        ${(request.requestHeaders || []).map(header => `
+                                                            <div class="header-item">
+                                                                <span class="header-name">${header.name}:</span>
+                                                                <span class="header-value">${header.value}</span>
+                                                            </div>
+                                                        `).join('')}
+                                                    </div>
+                                                    
+                                                    <h4>Response Headers</h4>
+                                                    <div class="headers-list">
+                                                        ${(request.responseHeaders || []).map(header => `
+                                                            <div class="header-item">
+                                                                <span class="header-name">${header.name}:</span>
+                                                                <span class="header-value">${header.value}</span>
+                                                            </div>
+                                                        `).join('')}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div id="request-${index}-response" class="request-tab-panel">
+                                                <div class="response-body-section">
+                                                    <h4>Response Body ${request.responseBodyEncoding === 'base64' ? '(Base64 Decoded)' : ''}</h4>
+                                                    <div class="response-body">
+                                                        ${request.responseBody ? `<pre>${request.responseBody}</pre>` : '<p class="no-data">No response body captured or response body is empty</p>'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : '<p class="no-data">No network requests captured</p>'}
+                </div>
+                
+                <!-- Console Tab -->
+                <div id="console-tab" class="tab-panel">
+                    <h3>Console Logs</h3>
+                    ${previewData.consoleLogs.length > 0 ? `
+                        <div class="console-logs">
+                            ${previewData.consoleLogs.map(log => `
+                                <div class="console-log-item log-${log.level}">
+                                    <span class="timestamp">[${new Date(log.timestamp).toLocaleTimeString()}]</span>
+                                    <span class="level">${log.level.toUpperCase()}</span>
+                                    <span class="message">${log.message}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : '<p class="no-data">No console logs captured</p>'}
+                </div>
+                
+                <!-- User Actions Tab -->
+                <div id="actions-tab" class="tab-panel">
+                    <h3>User Actions</h3>
+                    ${previewData.userActions.length > 0 ? `
+                        <div class="user-actions">
+                            ${previewData.userActions.map(action => `
+                                <div class="user-action-item">
+                                    <span class="timestamp">[${new Date(action.timestamp).toLocaleTimeString()}]</span>
+                                    <span class="action-type">${action.type}</span>
+                                    <span class="action-details">${action.text || action.value || action.url || ''}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : '<p class="no-data">No user actions captured</p>'}
+                </div>
+                
+                <!-- Environment Tab -->
+                <div id="environment-tab" class="tab-panel">
+                    <h3>Environment Data</h3>
+                    ${previewData.environmentData && Object.keys(previewData.environmentData).length > 0 ? `
+                        <pre class="environment-data">${JSON.stringify(previewData.environmentData, null, 2)}</pre>
+                    ` : '<p class="no-data">No environment data captured</p>'}
+                </div>
+            </div>
+        </div>
+        
         <!-- Notes section removed per new design -->
     </div>
     
@@ -2839,6 +4041,91 @@ function createPreviewHtml(previewData) {
                 }
             } catch (e) {}
         })();
+        
+        // Tab functionality
+        function switchTab(tabName) {
+            // Hide all tab panels
+            document.querySelectorAll('.tab-panel').forEach(panel => {
+                panel.classList.remove('active');
+            });
+            
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('active');
+            });
+            
+            // Show selected tab panel
+            const targetPanel = document.getElementById(tabName + '-tab');
+            if (targetPanel) {
+                targetPanel.classList.add('active');
+            }
+            
+            // Add active class to clicked button
+            const targetButton = document.querySelector('[data-tab="' + tabName + '"]');
+            if (targetButton) {
+                targetButton.classList.add('active');
+            }
+        }
+        
+        // Network request toggle functionality
+        function toggleRequest(index) {
+            const details = document.getElementById('request-' + index);
+            const icon = document.querySelector('[onclick="toggleRequest(' + index + ')"] .toggle-icon');
+            
+            if (details && icon) {
+                if (details.classList.contains('open')) {
+                    details.classList.remove('open');
+                    icon.classList.remove('rotated');
+                } else {
+                    details.classList.add('open');
+                    icon.classList.add('rotated');
+                }
+            }
+        }
+        
+        // Request tab functionality
+        function showRequestTab(requestIndex, tabName) {
+            // Hide all request tab panels for this request
+            document.querySelectorAll('#request-' + requestIndex + ' .request-tab-panel').forEach(panel => {
+                panel.classList.remove('active');
+            });
+            
+            // Remove active class from all request tab buttons for this request
+            document.querySelectorAll('#request-' + requestIndex + ' .request-tab-btn').forEach(button => {
+                button.classList.remove('active');
+            });
+            
+            // Show selected request tab panel
+            const targetPanel = document.getElementById('request-' + requestIndex + '-' + tabName);
+            if (targetPanel) {
+                targetPanel.classList.add('active');
+            }
+            
+            // Add active class to clicked button
+            const buttons = document.querySelectorAll('#request-' + requestIndex + ' .request-tab-btn');
+            for (let button of buttons) {
+                if (button.onclick && button.onclick.toString().includes("'" + tabName + "'")) {
+                    button.classList.add('active');
+                    break;
+                }
+            }
+        }
+        
+        // Initialize all event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add event listeners for main tab buttons
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const tabName = this.getAttribute('data-tab');
+                    switchTab(tabName);
+                });
+            });
+        });
+        
+        // Make functions available globally for onclick handlers
+        window.toggleRequest = toggleRequest;
+        window.showRequestTab = showRequestTab;
+        window.switchTab = switchTab;
     </script>
 </body>
 </html>`;

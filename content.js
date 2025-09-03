@@ -394,30 +394,35 @@
     function overrideConsole() {
         ['log', 'warn', 'error', 'info', 'debug'].forEach(level => {
             console[level] = function(...args) {
-                // Suppress tool-internal logs from page console and from report capture
-                const isInternal = args.some(a => typeof a === 'string' && /(BugReel|CONTENT|OFFSCREEN|SERVICE WORKER|ServiceWorker|Offscreen)/i.test(a));
+                // Suppress tool-internal logs from report capture (but allow them in browser console for debugging)
+                const isInternal = args.some(a => typeof a === 'string' && /(BugReel|CONTENT|OFFSCREEN)/i.test(a));
+                
+                // Still call original console method for all messages (for debugging)
+                originalConsole[level].apply(console, args);
+                
+                // But don't capture internal messages in the report
                 if (isInternal) {
-                    return; // do not forward or print
+                    return; // do not forward to report
                 }
                 // Send to service worker if logging is active
                 if (isLogging) {
                     try {
+                        const payload = {
+                            level: level,
+                            message: safeJsonStringify(args),
+                            timestamp: new Date().toISOString(),
+                            url: window.location.href
+                        };
+                        // Use original console to avoid recursion
+                        originalConsole.log('CONTENT: 📤 Sending console log to background:', payload);
                         chrome.runtime.sendMessage({
                             type: 'CONSOLE_LOG',
-                            payload: {
-                                level: level,
-                                message: safeJsonStringify(args),
-                                timestamp: new Date().toISOString(),
-                                url: window.location.href
-                            }
+                            payload: payload
                         });
                     } catch (error) {
-                        // Silently handle errors to avoid breaking the page
+                        originalConsole.error('CONTENT: ❌ Failed to send console log:', error);
                     }
                 }
-                
-                // Call original console method
-                originalConsole[level].apply(console, args);
             };
         });
     }
@@ -578,6 +583,9 @@
         } catch (error) {
             console.error('CONTENT: ❌ Error overriding console:', error);
         }
+        
+        // Test console logging immediately
+        console.log('🧪 TEST: Console logging is working! Timestamp:', new Date().toISOString());
         
         // Create recording toolbar
         console.log('CONTENT: 🎨 Creating recording toolbar...');
