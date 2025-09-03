@@ -3846,7 +3846,7 @@ function createPreviewHtml(previewData) {
                             Your browser does not support the video tag.
                         </video>
                         <div class="video-info">
-                            <strong>Duration:</strong> <span id="brDuration">${typeof previewData.videoData.duration === 'number' && isFinite(previewData.videoData.duration) && previewData.videoData.duration > 0 ? (previewData.videoData.duration / 1000).toFixed(1) + 's' : 'Unknown'}</span><br>
+
                             <strong>Size:</strong> ${previewData.videoData.size ? (previewData.videoData.size / 1024 / 1024).toFixed(1) + ' MB' : 'Unknown'}<br>
                             <strong>Format:</strong> ${previewData.videoData.mimeType || 'Unknown'}
                         </div>
@@ -3909,25 +3909,7 @@ function createPreviewHtml(previewData) {
     </div>
     
     <script>
-        // Update duration from actual video metadata if missing or 'Unknown'
-        (function(){
-            try {
-                const video = document.querySelector('.video-player');
-                const durSpan = document.getElementById('brDuration');
-                if (video && durSpan) {
-                    const setDur = () => {
-                        if (isFinite(video.duration) && video.duration > 0) {
-                            durSpan.textContent = (video.duration).toFixed(1) + 's';
-                        }
-                    };
-                    video.addEventListener('loadedmetadata', setDur, { once: true });
-                    // In case metadata is already loaded
-                    if (!isNaN(video.duration) && isFinite(video.duration) && video.duration > 0) {
-                        setDur();
-                    }
-                }
-            } catch (e) {}
-        })();
+
         
 
     </script>
