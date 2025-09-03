@@ -349,7 +349,7 @@
         const toolbar = document.getElementById('bugreel-toolbar');
         if (toolbar) {
             toolbar.remove();
-            console.log('CONTENT: Recording toolbar removed');
+
         }
         
         // Stop timer
@@ -569,69 +569,53 @@
     
     // Start logging
     function startLogging(recordingMode = 'video') {
-        console.log('CONTENT: 🎬 Starting logging with mode:', recordingMode);
-        console.log('CONTENT: Current isLogging state:', isLogging);
+
         
         isLogging = true;
-        console.log('CONTENT: ✅ Set isLogging to true');
+
         
         // Override console methods
-        console.log('CONTENT: 🔧 Overriding console methods...');
+
         try {
             overrideConsole();
-            console.log('CONTENT: ✅ Console methods overridden successfully');
+
         } catch (error) {
             console.error('CONTENT: ❌ Error overriding console:', error);
         }
         
-        // Test console logging immediately
-        console.log('🧪 TEST: Console logging is working! Timestamp:', new Date().toISOString());
-        
+
         // Create recording toolbar
-        console.log('CONTENT: 🎨 Creating recording toolbar...');
+
         try {
             createRecordingToolbar(recordingMode);
-            console.log('CONTENT: ✅ Recording toolbar creation attempted');
+
             
-            // Check if toolbar was actually created
-            const toolbar = document.getElementById('bugreel-toolbar');
-            if (toolbar) {
-                console.log('CONTENT: ✅ Toolbar element found in DOM:', toolbar);
-                console.log('CONTENT: Toolbar innerHTML length:', toolbar.innerHTML.length);
-                console.log('CONTENT: Toolbar visible:', toolbar.offsetWidth > 0 && toolbar.offsetHeight > 0);
-            } else {
-                console.error('CONTENT: ❌ Toolbar element NOT found in DOM after creation');
-            }
+
         } catch (error) {
             console.error('CONTENT: ❌ Error creating recording toolbar:', error);
         }
         
         // Collect and send environment data
-        console.log('CONTENT: 📊 Collecting environment data...');
         try {
             const envData = collectEnvironmentData();
             chrome.runtime.sendMessage({
                 type: 'ENVIRONMENT_DATA',
                 payload: envData
             });
-            console.log('CONTENT: ✅ Environment data sent successfully');
         } catch (error) {
             console.error('CONTENT: ❌ Error sending environment data:', error);
         }
         
         // Add event listeners for user actions
-        console.log('CONTENT: 👂 Adding event listeners...');
         try {
             document.addEventListener('click', trackUserAction, true);
             document.addEventListener('input', trackUserAction, true);
             document.addEventListener('keydown', trackUserAction, true);
-            console.log('CONTENT: ✅ Event listeners added successfully');
         } catch (error) {
             console.error('CONTENT: ❌ Error adding event listeners:', error);
         }
         
         // Track URL changes
-        console.log('CONTENT: 🔗 Setting up URL change tracking...');
         try {
             window.addEventListener('popstate', trackUrlChange);
             window.addEventListener('hashchange', trackUrlChange);
@@ -656,12 +640,12 @@
                 return result;
             };
             
-            console.log('CONTENT: ✅ URL change tracking set up successfully');
+
         } catch (error) {
             console.error('CONTENT: ❌ Error setting up URL change tracking:', error);
         }
         
-        console.log('CONTENT: 🎉 StartLogging completed successfully');
+
     }
     
     // Stop logging
@@ -691,22 +675,17 @@
     
     // Listen for messages from service worker
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        console.log('CONTENT: 📨 Message received:', message.type, 'on:', window.location.href);
-        console.log('CONTENT: Message details:', message);
+
         
         try {
             switch (message.type) {
                 case 'START_LOGGING':
-                    console.log('CONTENT: 🎬 Processing START_LOGGING message');
                     startLogging(message.recordingMode);
-                    console.log('CONTENT: ✅ START_LOGGING completed successfully');
                     sendResponse({ success: true });
                     break;
                     
                 case 'STOP_LOGGING':
-                    console.log('CONTENT: 🛑 Processing STOP_LOGGING message');
                     stopLogging();
-                    console.log('CONTENT: ✅ STOP_LOGGING completed successfully');
                     sendResponse({ success: true });
                     break;
                     
@@ -720,19 +699,19 @@
                         hasToolbar: !!toolbar,
                         url: window.location.href
                     };
-                    console.log('CONTENT: 🏓 PING response:', response);
+
                     sendResponse(response);
                     break;
                     
                 case 'REMOVE_TOOLBAR':
                     // Remove existing toolbar to prevent duplicates
-                    console.log('CONTENT: 🗑️ Removing toolbar');
+
                     removeRecordingToolbar();
                     sendResponse({ success: true });
                     break;
                 
                 case 'FREEZE_TIMER':
-                    console.log('CONTENT: ⏸️ Freezing timer display');
+
                     freezeTimer();
                     sendResponse({ success: true });
                     break;
